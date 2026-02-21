@@ -1,6 +1,12 @@
 import streamlit as st
 from scanner import scan_nifty50
-from database import init_db, get_active_trades, get_weekly_trade_count
+from database import (
+    init_db,
+    get_active_trades,
+    get_weekly_trade_count,
+    add_trade,
+    increment_weekly_trade
+)
 
 # -------------------------------
 # PAGE CONFIG
@@ -67,10 +73,7 @@ st.markdown("### Active Trades")
 active_trades = get_active_trades()
 
 if active_trades:
-    st.dataframe(
-        active_trades,
-        use_container_width=True
-    )
+    st.dataframe(active_trades, use_container_width=True)
 else:
     st.write("No active trades")
 
@@ -82,7 +85,7 @@ weekly_count = get_weekly_trade_count()
 st.write(f"Weekly Trades Taken: {weekly_count} / 3")
 
 # -------------------------------
-# NIFTY 50 SCANNER
+# NIFTY 50 SCANNER + AUTO ENTRY
 # -------------------------------
 
 st.markdown("---")
@@ -95,15 +98,12 @@ if st.button("Run NIFTY 50 Scan"):
 
     if df is not None and not df.empty:
 
-        st.markdown("### All Results (Sorted by Confidence)")
-        st.dataframe(df, use_container_width=True)
-
         filtered = df[df["confidence"] >= 72]
 
         st.markdown("### Eligible Trades (Confidence ≥ 72%)")
 
         if not filtered.empty:
-            st.success(f"{len(filtered)} Stocks Eligible")
+
             st.dataframe(
                 filtered[[
                     "symbol",
@@ -115,6 +115,37 @@ if st.button("Run NIFTY 50 Scan"):
                 ]],
                 use_container_width=True
             )
+
+            # Pick top 1
+            top_trade = filtered.iloc[0]
+
+            # Refresh active & weekly count
+            active_trades = get_active_trades()
+            weekly_count = get_weekly_trade_count()
+
+            # Safety checks
+            if st.session_state.system_mode != "ACTIVE":
+                st.warning("System is paused. No trade executed.")
+
+            elif len(active_trades) >= 4:
+                st.warning("Max active trades reached.")
+
+            elif weekly_count >= 3:
+                st.warning("Weekly trade limit reached.")
+
+            else:
+                add_trade(
+                    symbol=top_trade["symbol"],
+                    entry_price=top_trade["price"],
+                    stop_price=top_trade["stop_price"],
+                    position_size=top_trade["position_size"],
+                    confidence=top_trade["confidence"]
+                )
+
+                increment_weekly_trade()
+
+                st.success(f"Auto Trade Simulated: {top_trade['symbol']}")
+
         else:
             st.warning("No stocks meet the 72% confidence threshold today.")
 
