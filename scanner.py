@@ -116,15 +116,22 @@ def scan_nifty50():
 
 def market_is_bullish():
     import yfinance as yf
+    import pandas as pd
     import ta
 
     data = yf.download("^NSEI", period="1y", interval="1d", auto_adjust=True)
 
-    if len(data) < 200:
+    if data is None or len(data) < 200:
         return False
+
+    # Flatten multi-index if present
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.get_level_values(0)
+
+    data["Close"] = data["Close"].astype(float)
 
     data["EMA200"] = ta.trend.ema_indicator(data["Close"], window=200)
 
     latest = data.iloc[-1]
 
-    return latest["Close"] > latest["EMA200"]
+    return float(latest["Close"]) > float(latest["EMA200"])
