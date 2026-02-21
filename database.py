@@ -3,9 +3,27 @@ from datetime import datetime
 
 DB_NAME = "trades.db"
 
+
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+
+    # -------------------------------
+    # TRADES TABLE (Schema-safe)
+    # -------------------------------
+
+    cursor.execute("""
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name='trades'
+    """)
+    table_exists = cursor.fetchone()
+
+    if table_exists:
+        cursor.execute("PRAGMA table_info(trades)")
+        columns = [col[1] for col in cursor.fetchall()]
+
+        if "buy_order_id" not in columns:
+            cursor.execute("DROP TABLE trades")
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS trades (
@@ -22,6 +40,10 @@ def init_db():
     )
     """)
 
+    # -------------------------------
+    # WEEKLY TRADE STATS
+    # -------------------------------
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS trade_stats (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,12 +52,20 @@ def init_db():
     )
     """)
 
+    # -------------------------------
+    # PORTFOLIO TABLE
+    # -------------------------------
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS portfolio (
         id INTEGER PRIMARY KEY,
         peak_equity REAL
     )
     """)
+
+    # -------------------------------
+    # EQUITY HISTORY
+    # -------------------------------
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS equity_history (
@@ -44,6 +74,7 @@ def init_db():
     )
     """)
 
+    # Initialize peak equity if not exists
     cursor.execute("SELECT * FROM portfolio WHERE id=1")
     if not cursor.fetchone():
         cursor.execute("INSERT INTO portfolio (id, peak_equity) VALUES (1, ?)", (10000,))
@@ -51,6 +82,10 @@ def init_db():
     conn.commit()
     conn.close()
 
+
+# -------------------------------
+# TRADE FUNCTIONS
+# -------------------------------
 
 def add_trade(symbol, entry_price, stop_price, position_size, confidence,
               buy_id=None, stop_id=None):
@@ -112,6 +147,10 @@ def get_all_trades():
     return data
 
 
+# -------------------------------
+# WEEKLY TRACKING
+# -------------------------------
+
 def get_week_number():
     return datetime.now().isocalendar()[1]
 
@@ -125,9 +164,15 @@ def increment_weekly_trade():
     result = cursor.fetchone()
 
     if result:
-        cursor.execute("UPDATE trade_stats SET trade_count=trade_count+1 WHERE week_number=?", (week,))
+        cursor.execute(
+            "UPDATE trade_stats SET trade_count=trade_count+1 WHERE week_number=?",
+            (week,)
+        )
     else:
-        cursor.execute("INSERT INTO trade_stats (week_number, trade_count) VALUES (?, ?)", (week, 1))
+        cursor.execute(
+            "INSERT INTO trade_stats (week_number, trade_count) VALUES (?, ?)",
+            (week, 1)
+        )
 
     conn.commit()
     conn.close()
@@ -142,6 +187,10 @@ def get_weekly_trade_count():
     conn.close()
     return result[0] if result else 0
 
+
+# -------------------------------
+# PORTFOLIO FUNCTIONS
+# -------------------------------
 
 def get_peak_equity():
     conn = sqlite3.connect(DB_NAME)
