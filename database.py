@@ -117,3 +117,16 @@ def close_trade(trade_id):
 
     conn.commit()
     conn.close()
+
+def update_stop(trade_id, new_stop):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    UPDATE trades
+    SET stop_price=?
+    WHERE id=?
+    """, (new_stop, trade_id))
+
+    conn.commit()
+    conn.close()

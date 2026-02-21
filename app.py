@@ -1,11 +1,15 @@
 import streamlit as st
+import yfinance as yf
+
 from scanner import scan_nifty50
 from database import (
     init_db,
     get_active_trades,
     get_weekly_trade_count,
     add_trade,
-    increment_weekly_trade
+    increment_weekly_trade,
+    close_trade,
+    update_stop
 )
 
 # -------------------------------
@@ -76,38 +80,58 @@ if active_trades:
     st.dataframe(active_trades, use_container_width=True)
 else:
     st.write("No active trades")
-import yfinance as yf
-from database import close_trade
 
-# -------------------------------
-# STOP MONITORING
-# -------------------------------
-
-if active_trades:
-    st.markdown("### Stop Monitoring")
-
-    for trade in active_trades:
-        trade_id = trade[0]
-        symbol = trade[1]
-        entry_price = trade[2]
-        stop_price = trade[3]
-        position_size = trade[4]
-
-        data = yf.download(symbol, period="5d", interval="1d", auto_adjust=True)
-
-        if not data.empty:
-            latest_price = float(data["Close"].iloc[-1])
-
-            if latest_price <= stop_price:
-                close_trade(trade_id)
-                st.error(f"Stop Hit — Trade Closed: {symbol}")
-                
 # -------------------------------
 # WEEKLY TRADE COUNT
 # -------------------------------
 
 weekly_count = get_weekly_trade_count()
 st.write(f"Weekly Trades Taken: {weekly_count} / 3")
+
+# -------------------------------
+# STOP + TRAILING MONITORING
+# -------------------------------
+
+if active_trades:
+    st.markdown("---")
+    st.markdown("### Stop Monitoring & Trailing")
+
+    for trade in active_trades:
+        trade_id = trade[0]
+        symbol = trade[1]
+        entry_price = trade[2]
+        stop_price = trade[3]
+
+        data = yf.download(symbol, period="5d", interval="1d", auto_adjust=True)
+
+        if not data.empty:
+            latest_price = float(data["Close"].iloc[-1])
+
+            # --- STOP HIT ---
+            if latest_price <= stop_price:
+                close_trade(trade_id)
+                st.error(f"Stop Hit — Trade Closed: {symbol}")
+                continue
+
+            profit_pct = (latest_price - entry_price) / entry_price
+            new_stop = stop_price
+
+            # Phase 1: Move to breakeven at +5%
+            if profit_pct >= 0.05 and stop_price < entry_price:
+                new_stop = entry_price
+
+            # Phase 2: Trail at 5% when +10%
+            if profit_pct >= 0.10:
+                new_stop = latest_price * 0.95
+
+            # Phase 3: Trail at 7% when +15%
+            if profit_pct >= 0.15:
+                new_stop = latest_price * 0.93
+
+            # Only update if stop increases
+            if new_stop > stop_price:
+                update_stop(trade_id, new_stop)
+                st.info(f"Trailing Stop Updated: {symbol}")
 
 # -------------------------------
 # NIFTY 50 SCANNER + AUTO ENTRY
@@ -141,14 +165,12 @@ if st.button("Run NIFTY 50 Scan"):
                 use_container_width=True
             )
 
-            # Pick top 1
             top_trade = filtered.iloc[0]
 
-            # Refresh active & weekly count
             active_trades = get_active_trades()
             weekly_count = get_weekly_trade_count()
 
-            # Safety checks
+            # Safety Checks
             if st.session_state.system_mode != "ACTIVE":
                 st.warning("System is paused. No trade executed.")
 
