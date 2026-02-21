@@ -1,7 +1,15 @@
 import streamlit as st
 from scanner import scan_nifty50
+from database import init_db, get_active_trades, get_weekly_trade_count
+
+# -------------------------------
+# PAGE CONFIG
+# -------------------------------
 
 st.set_page_config(page_title="Safe Alpha Engine", layout="wide")
+
+# Initialize Database
+init_db()
 
 st.title("Safe Alpha Engine Dashboard")
 
@@ -49,12 +57,35 @@ with colC:
 with colD:
     st.metric("Min Confidence", "72%")
 
+# -------------------------------
+# ACTIVE TRADES SECTION
+# -------------------------------
+
 st.markdown("---")
+st.markdown("### Active Trades")
+
+active_trades = get_active_trades()
+
+if active_trades:
+    st.dataframe(
+        active_trades,
+        use_container_width=True
+    )
+else:
+    st.write("No active trades")
+
+# -------------------------------
+# WEEKLY TRADE COUNT
+# -------------------------------
+
+weekly_count = get_weekly_trade_count()
+st.write(f"Weekly Trades Taken: {weekly_count} / 3")
 
 # -------------------------------
 # NIFTY 50 SCANNER
 # -------------------------------
 
+st.markdown("---")
 st.markdown("## NIFTY 50 Scanner")
 
 if st.button("Run NIFTY 50 Scan"):
@@ -73,14 +104,17 @@ if st.button("Run NIFTY 50 Scan"):
 
         if not filtered.empty:
             st.success(f"{len(filtered)} Stocks Eligible")
-            st.dataframe(filtered[[
-    "symbol",
-    "price",
-    "confidence",
-    "stop_price",
-    "stop_pct",
-    "position_size"
-]], use_container_width=True)
+            st.dataframe(
+                filtered[[
+                    "symbol",
+                    "price",
+                    "confidence",
+                    "stop_price",
+                    "stop_pct",
+                    "position_size"
+                ]],
+                use_container_width=True
+            )
         else:
             st.warning("No stocks meet the 72% confidence threshold today.")
 
