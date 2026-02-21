@@ -1,8 +1,13 @@
 import streamlit as st
+from scanner import scan_nifty50
 
 st.set_page_config(page_title="Safe Alpha Engine", layout="wide")
 
 st.title("Safe Alpha Engine Dashboard")
+
+# -------------------------------
+# SYSTEM MODE STATE
+# -------------------------------
 
 if "system_mode" not in st.session_state:
     st.session_state.system_mode = "ACTIVE"
@@ -24,28 +29,53 @@ with col3:
 st.markdown("---")
 st.write(f"### System Status: {st.session_state.system_mode}")
 
+# -------------------------------
+# PORTFOLIO OVERVIEW
+# -------------------------------
+
 st.markdown("### Portfolio Overview")
-st.write("Capital: ₹10,000")
-st.write("Risk per trade: 1%")
-st.write("Max trades: 4")
-st.write("Min AI Confidence: 72%")
-from scanner import scan_stock
+
+colA, colB, colC, colD = st.columns(4)
+
+with colA:
+    st.metric("Capital", "₹10,000")
+
+with colB:
+    st.metric("Risk per Trade", "1%")
+
+with colC:
+    st.metric("Max Active Trades", "4")
+
+with colD:
+    st.metric("Min Confidence", "72%")
 
 st.markdown("---")
-st.markdown("### Scanner Test")
 
-symbol = st.text_input("Enter NSE Stock (e.g., TCS.NS)", "TCS.NS")
+# -------------------------------
+# NIFTY 50 SCANNER
+# -------------------------------
 
-if st.button("Run Scan"):
-    result = scan_stock(symbol)
-    if result:
-        st.write("Stock:", result["symbol"])
-        st.write("Price:", result["price"])
-        st.write("AI Confidence:", result["confidence"], "%")
-        
-        if result["confidence"] >= 72:
-            st.success("Trade Eligible")
+st.markdown("## NIFTY 50 Scanner")
+
+if st.button("Run NIFTY 50 Scan"):
+
+    with st.spinner("Scanning NIFTY 50... Please wait."):
+        df = scan_nifty50()
+
+    if df is not None and not df.empty:
+
+        st.markdown("### All Results (Sorted by Confidence)")
+        st.dataframe(df, use_container_width=True)
+
+        filtered = df[df["confidence"] >= 72]
+
+        st.markdown("### Eligible Trades (Confidence ≥ 72%)")
+
+        if not filtered.empty:
+            st.success(f"{len(filtered)} Stocks Eligible")
+            st.dataframe(filtered, use_container_width=True)
         else:
-            st.warning("Below Confidence Threshold")
+            st.warning("No stocks meet the 72% confidence threshold today.")
+
     else:
-        st.error("Not enough data")
+        st.error("Scanner returned no data.")
