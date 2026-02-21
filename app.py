@@ -15,6 +15,11 @@ from database import (
 )
 
 BASE_CAPITAL = 10000
+DEFAULT_RISK_PERCENT = 1
+DEFENSIVE_RISK_PERCENT = 0.5
+
+DEFAULT_MAX_TRADES = 4
+DEFENSIVE_MAX_TRADES = 2
 
 st.set_page_config(page_title="Safe Alpha Engine", layout="wide")
 init_db()
@@ -44,18 +49,6 @@ with col3:
 
 st.markdown("---")
 st.write(f"### System Status: {st.session_state.system_mode}")
-
-# -------------------------------
-# PORTFOLIO OVERVIEW
-# -------------------------------
-
-st.markdown("### Portfolio Overview")
-colA, colB, colC, colD = st.columns(4)
-
-colA.metric("Capital", "₹10,000")
-colB.metric("Risk per Trade", "1%")
-colC.metric("Max Active Trades", "4")
-colD.metric("Min Confidence", "72%")
 
 # -------------------------------
 # MARKET REGIME
@@ -127,5 +120,81 @@ col2.metric("Unrealized P&L", f"₹{round(total_unrealized,2)}")
 col3.metric("Current Equity", f"₹{round(current_equity,2)}")
 col4.metric("Drawdown %", f"{round(drawdown_pct,2)}%")
 
+# -------------------------------
+# DEFENSIVE MODE LOGIC
+# -------------------------------
+
 if drawdown_pct <= -5:
-    st.error("⚠ Defensive Mode Triggered (Drawdown ≥ 5%)")
+    st.error("⚠ Defensive Mode Activated (Drawdown ≥ 5%)")
+    current_risk_percent = DEFENSIVE_RISK_PERCENT
+    max_active_trades = DEFENSIVE_MAX_TRADES
+else:
+    current_risk_percent = DEFAULT_RISK_PERCENT
+    max_active_trades = DEFAULT_MAX_TRADES
+
+st.markdown("---")
+st.markdown("### Risk Control Status")
+
+colA, colB = st.columns(2)
+colA.metric("Risk Per Trade %", f"{current_risk_percent}%")
+colB.metric("Max Active Trades", f"{max_active_trades}")
+
+# -------------------------------
+# NIFTY 50 SCANNER + AUTO ENTRY
+# -------------------------------
+
+st.markdown("---")
+st.markdown("## NIFTY 50 Scanner")
+
+if st.button("Run NIFTY 50 Scan"):
+
+    with st.spinner("Scanning NIFTY 50... Please wait."):
+        df = scan_nifty50()
+
+    if df is not None and not df.empty:
+
+        filtered = df[df["confidence"] >= 72]
+
+        if not filtered.empty:
+
+            st.dataframe(
+                filtered[[
+                    "symbol",
+                    "price",
+                    "confidence",
+                    "stop_price",
+                    "stop_pct",
+                    "position_size"
+                ]],
+                use_container_width=True
+            )
+
+            top_trade = filtered.iloc[0]
+            active_trades = get_active_trades()
+
+            if st.session_state.system_mode != "ACTIVE":
+                st.warning("System is paused.")
+
+            elif not market_bullish:
+                st.error("Market below 200 DMA. Trades blocked.")
+
+            elif len(active_trades) >= max_active_trades:
+                st.warning("Max active trades limit reached.")
+
+            elif weekly_count >= 3:
+                st.warning("Weekly trade limit reached.")
+
+            else:
+                add_trade(
+                    symbol=top_trade["symbol"],
+                    entry_price=top_trade["price"],
+                    stop_price=top_trade["stop_price"],
+                    position_size=top_trade["position_size"],
+                    confidence=top_trade["confidence"]
+                )
+
+                increment_weekly_trade()
+                st.success(f"Auto Trade Simulated: {top_trade['symbol']}")
+
+        else:
+            st.warning("No eligible trades today.")
