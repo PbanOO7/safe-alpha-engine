@@ -73,7 +73,14 @@ if st.button("Run NIFTY 50 Scan"):
 
         if not filtered.empty:
             st.success(f"{len(filtered)} Stocks Eligible")
-            st.dataframe(filtered, use_container_width=True)
+            st.dataframe(filtered[[
+    "symbol",
+    "price",
+    "confidence",
+    "stop_price",
+    "stop_pct",
+    "position_size"
+]], use_container_width=True)
         else:
             st.warning("No stocks meet the 72% confidence threshold today.")
 

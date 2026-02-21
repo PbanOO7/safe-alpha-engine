@@ -2,7 +2,10 @@ import yfinance as yf
 import pandas as pd
 import ta
 
-# NIFTY 50 Symbols (Yahoo format)
+CAPITAL = 10000
+RISK_PER_TRADE = 0.01  # 1%
+MAX_STOP_CAP = 0.10    # 10%
+
 NIFTY50 = [
     "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ICICIBANK.NS",
     "HINDUNILVR.NS","ITC.NS","SBIN.NS","BHARTIARTL.NS","LT.NS",
@@ -31,23 +34,25 @@ def score_stock(symbol):
         data["EMA50"] = ta.trend.ema_indicator(data["Close"], window=50)
         data["EMA200"] = ta.trend.ema_indicator(data["Close"], window=200)
         data["RSI"] = ta.momentum.rsi(data["Close"], window=14)
+        data["ATR"] = ta.volatility.average_true_range(
+            data["High"], data["Low"], data["Close"], window=14
+        )
 
         latest = data.iloc[-1]
         confidence = 0
 
-        # Weekly trend proxy (200 EMA)
+        # Trend alignment
         if latest["Close"] > latest["EMA200"]:
             confidence += 25
 
-        # Daily trend structure
         if latest["Close"] > latest["EMA20"] > latest["EMA50"]:
             confidence += 20
 
-        # Volume expansion
+        # Volume
         if latest["Volume"] > data["Volume"].rolling(20).mean().iloc[-1]:
             confidence += 15
 
-        # RSI healthy
+        # RSI
         if 50 < latest["RSI"] < 70:
             confidence += 10
 
@@ -55,14 +60,43 @@ def score_stock(symbol):
         if latest["Close"] > latest["Open"]:
             confidence += 10
 
-        # Simple breakout condition
-        if latest["Close"] == data["Close"].rolling(20).max().iloc[-1]:
+        # Breakout condition
+        if latest["Close"] >= data["Close"].rolling(20).max().iloc[-1]:
             confidence += 20
+
+        # -------------------
+        # STOP CALCULATION
+        # -------------------
+
+        entry_price = float(latest["Close"])
+
+        # ATR stop
+        atr_stop = entry_price - (2 * latest["ATR"])
+        atr_stop_pct = (entry_price - atr_stop) / entry_price
+
+        # Structure stop (recent swing low)
+        recent_low = data["Low"].rolling(20).min().iloc[-1]
+        structure_stop_pct = (entry_price - recent_low) / entry_price
+
+        # Choose tighter of the two
+        stop_pct = min(atr_stop_pct, structure_stop_pct)
+
+        # Cap at 10%
+        stop_pct = min(stop_pct, MAX_STOP_CAP)
+
+        stop_price = entry_price * (1 - stop_pct)
+
+        # Position sizing
+        risk_amount = CAPITAL * RISK_PER_TRADE
+        position_size = risk_amount / stop_pct
 
         return {
             "symbol": symbol,
-            "price": round(float(latest["Close"]),2),
-            "confidence": confidence
+            "price": round(entry_price, 2),
+            "confidence": round(confidence, 1),
+            "stop_price": round(stop_price, 2),
+            "stop_pct": round(stop_pct * 100, 2),
+            "position_size": round(position_size, 0)
         }
 
     except:
