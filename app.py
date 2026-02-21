@@ -1,17 +1,22 @@
 import streamlit as st
 import yfinance as yf
+import pandas as pd
+from datetime import datetime
 
 from scanner import scan_nifty50, market_is_bullish
 from database import (
     init_db,
     get_active_trades,
+    get_all_trades,
     get_weekly_trade_count,
     add_trade,
     increment_weekly_trade,
     close_trade,
     update_stop,
     get_peak_equity,
-    update_peak_equity
+    update_peak_equity,
+    record_equity,
+    get_equity_history
 )
 
 BASE_CAPITAL = 10000
@@ -111,6 +116,9 @@ if current_equity > peak_equity:
 
 drawdown_pct = (current_equity - peak_equity) / peak_equity * 100
 
+today = datetime.now().strftime("%Y-%m-%d")
+record_equity(today, current_equity)
+
 st.markdown("---")
 st.markdown("### Portfolio Performance")
 
@@ -120,10 +128,7 @@ col2.metric("Unrealized P&L", f"₹{round(total_unrealized,2)}")
 col3.metric("Current Equity", f"₹{round(current_equity,2)}")
 col4.metric("Drawdown %", f"{round(drawdown_pct,2)}%")
 
-# -------------------------------
-# DEFENSIVE MODE LOGIC
-# -------------------------------
-
+# Defensive risk mode
 if drawdown_pct <= -5:
     st.error("⚠ Defensive Mode Activated (Drawdown ≥ 5%)")
     current_risk_percent = DEFENSIVE_RISK_PERCENT
@@ -140,61 +145,36 @@ colA.metric("Risk Per Trade %", f"{current_risk_percent}%")
 colB.metric("Max Active Trades", f"{max_active_trades}")
 
 # -------------------------------
-# NIFTY 50 SCANNER + AUTO ENTRY
+# EQUITY CURVE
 # -------------------------------
 
 st.markdown("---")
-st.markdown("## NIFTY 50 Scanner")
+st.markdown("### Equity Curve")
 
-if st.button("Run NIFTY 50 Scan"):
+equity_data = get_equity_history()
 
-    with st.spinner("Scanning NIFTY 50... Please wait."):
-        df = scan_nifty50()
+if equity_data:
+    df_equity = pd.DataFrame(equity_data, columns=["Date", "Equity"])
+    df_equity["Date"] = pd.to_datetime(df_equity["Date"])
+    df_equity.set_index("Date", inplace=True)
+    st.line_chart(df_equity)
+else:
+    st.write("No equity history yet.")
 
-    if df is not None and not df.empty:
+# -------------------------------
+# TRADE ANALYTICS
+# -------------------------------
 
-        filtered = df[df["confidence"] >= 72]
+st.markdown("---")
+st.markdown("### Trade Analytics")
 
-        if not filtered.empty:
+all_trades = get_all_trades()
 
-            st.dataframe(
-                filtered[[
-                    "symbol",
-                    "price",
-                    "confidence",
-                    "stop_price",
-                    "stop_pct",
-                    "position_size"
-                ]],
-                use_container_width=True
-            )
-
-            top_trade = filtered.iloc[0]
-            active_trades = get_active_trades()
-
-            if st.session_state.system_mode != "ACTIVE":
-                st.warning("System is paused.")
-
-            elif not market_bullish:
-                st.error("Market below 200 DMA. Trades blocked.")
-
-            elif len(active_trades) >= max_active_trades:
-                st.warning("Max active trades limit reached.")
-
-            elif weekly_count >= 3:
-                st.warning("Weekly trade limit reached.")
-
-            else:
-                add_trade(
-                    symbol=top_trade["symbol"],
-                    entry_price=top_trade["price"],
-                    stop_price=top_trade["stop_price"],
-                    position_size=top_trade["position_size"],
-                    confidence=top_trade["confidence"]
-                )
-
-                increment_weekly_trade()
-                st.success(f"Auto Trade Simulated: {top_trade['symbol']}")
-
-        else:
-            st.warning("No eligible trades today.")
+if all_trades:
+    df_trades = pd.DataFrame(all_trades, columns=[
+        "ID","Symbol","Entry","Stop","PositionSize",
+        "Confidence","Status","Date"
+    ])
+    st.dataframe(df_trades)
+else:
+    st.write("No trade history yet.")

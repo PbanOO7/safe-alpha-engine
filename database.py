@@ -3,6 +3,7 @@ from datetime import datetime
 
 DB_NAME = "trades.db"
 
+
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -21,7 +22,7 @@ def init_db():
     )
     """)
 
-    # Weekly trade stats
+    # Weekly stats
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS trade_stats (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,6 +39,14 @@ def init_db():
     )
     """)
 
+    # Equity history
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS equity_history (
+        date TEXT PRIMARY KEY,
+        equity REAL
+    )
+    """)
+
     # Initialize peak equity if not exists
     cursor.execute("SELECT * FROM portfolio WHERE id=1")
     if not cursor.fetchone():
@@ -46,6 +55,10 @@ def init_db():
     conn.commit()
     conn.close()
 
+
+# -------------------------------
+# TRADE FUNCTIONS
+# -------------------------------
 
 def add_trade(symbol, entry_price, stop_price, position_size, confidence):
     conn = sqlite3.connect(DB_NAME)
@@ -105,6 +118,19 @@ def get_active_trades():
     return trades
 
 
+def get_all_trades():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM trades")
+    trades = cursor.fetchall()
+    conn.close()
+    return trades
+
+
+# -------------------------------
+# WEEKLY TRACKING
+# -------------------------------
+
 def get_week_number():
     return datetime.now().isocalendar()[1]
 
@@ -145,6 +171,10 @@ def get_weekly_trade_count():
     return result[0] if result else 0
 
 
+# -------------------------------
+# PORTFOLIO FUNCTIONS
+# -------------------------------
+
 def get_peak_equity():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -160,3 +190,23 @@ def update_peak_equity(new_peak):
     cursor.execute("UPDATE portfolio SET peak_equity=? WHERE id=1", (new_peak,))
     conn.commit()
     conn.close()
+
+
+def record_equity(date, equity):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO equity_history (date, equity)
+        VALUES (?, ?)
+    """, (date, equity))
+    conn.commit()
+    conn.close()
+
+
+def get_equity_history():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT date, equity FROM equity_history ORDER BY date")
+    data = cursor.fetchall()
+    conn.close()
+    return data
