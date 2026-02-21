@@ -96,6 +96,8 @@ if active_trades:
     st.markdown("---")
     st.markdown("### Stop Monitoring & Trailing")
 
+    monitor_data = []
+
     for trade in active_trades:
         trade_id = trade[0]
         symbol = trade[1]
@@ -107,31 +109,50 @@ if active_trades:
         if not data.empty:
             latest_price = float(data["Close"].iloc[-1])
 
-            # --- STOP HIT ---
+            profit_pct = (latest_price - entry_price) / entry_price
+            distance_to_stop = (latest_price - stop_price) / latest_price
+
+            trailing_phase = "None"
+            new_stop = stop_price
+
+            # STOP HIT
             if latest_price <= stop_price:
                 close_trade(trade_id)
                 st.error(f"Stop Hit — Trade Closed: {symbol}")
                 continue
 
-            profit_pct = (latest_price - entry_price) / entry_price
-            new_stop = stop_price
-
-            # Phase 1: Move to breakeven at +5%
+            # Phase 1
             if profit_pct >= 0.05 and stop_price < entry_price:
                 new_stop = entry_price
+                trailing_phase = "Breakeven"
 
-            # Phase 2: Trail at 5% when +10%
+            # Phase 2
             if profit_pct >= 0.10:
                 new_stop = latest_price * 0.95
+                trailing_phase = "5% Trailing"
 
-            # Phase 3: Trail at 7% when +15%
+            # Phase 3
             if profit_pct >= 0.15:
                 new_stop = latest_price * 0.93
+                trailing_phase = "7% Trailing"
 
-            # Only update if stop increases
+            # Update only upward
             if new_stop > stop_price:
                 update_stop(trade_id, new_stop)
-                st.info(f"Trailing Stop Updated: {symbol}")
+                stop_price = new_stop
+
+            monitor_data.append({
+                "Symbol": symbol,
+                "Entry": round(entry_price,2),
+                "Current Price": round(latest_price,2),
+                "Stop": round(stop_price,2),
+                "Profit %": round(profit_pct*100,2),
+                "Distance to Stop %": round(distance_to_stop*100,2),
+                "Trailing Phase": trailing_phase
+            })
+
+    if monitor_data:
+        st.dataframe(monitor_data, use_container_width=True)
 
 # -------------------------------
 # NIFTY 50 SCANNER + AUTO ENTRY
