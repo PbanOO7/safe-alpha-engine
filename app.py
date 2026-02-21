@@ -1,7 +1,7 @@
 import streamlit as st
 import yfinance as yf
 
-from scanner import scan_nifty50
+from scanner import scan_nifty50, market_is_bullish
 from database import (
     init_db,
     get_active_trades,
@@ -18,7 +18,7 @@ from database import (
 
 st.set_page_config(page_title="Safe Alpha Engine", layout="wide")
 
-# Initialize Database
+# Initialize DB
 init_db()
 
 st.title("Safe Alpha Engine Dashboard")
@@ -68,7 +68,20 @@ with colD:
     st.metric("Min Confidence", "72%")
 
 # -------------------------------
-# ACTIVE TRADES SECTION
+# MARKET REGIME FILTER
+# -------------------------------
+
+market_bullish = market_is_bullish()
+
+st.markdown("---")
+
+if market_bullish:
+    st.success("Market Regime: BULLISH (Above 200 DMA)")
+else:
+    st.error("Market Regime: DEFENSIVE MODE (Below 200 DMA)")
+
+# -------------------------------
+# ACTIVE TRADES
 # -------------------------------
 
 st.markdown("---")
@@ -108,7 +121,6 @@ if active_trades:
 
         if not data.empty:
             latest_price = float(data["Close"].iloc[-1])
-
             profit_pct = (latest_price - entry_price) / entry_price
             distance_to_stop = (latest_price - stop_price) / latest_price
 
@@ -121,33 +133,32 @@ if active_trades:
                 st.error(f"Stop Hit — Trade Closed: {symbol}")
                 continue
 
-            # Phase 1
+            # Phase 1: Breakeven at +5%
             if profit_pct >= 0.05 and stop_price < entry_price:
                 new_stop = entry_price
                 trailing_phase = "Breakeven"
 
-            # Phase 2
+            # Phase 2: 5% trailing at +10%
             if profit_pct >= 0.10:
                 new_stop = latest_price * 0.95
                 trailing_phase = "5% Trailing"
 
-            # Phase 3
+            # Phase 3: 7% trailing at +15%
             if profit_pct >= 0.15:
                 new_stop = latest_price * 0.93
                 trailing_phase = "7% Trailing"
 
-            # Update only upward
             if new_stop > stop_price:
                 update_stop(trade_id, new_stop)
                 stop_price = new_stop
 
             monitor_data.append({
                 "Symbol": symbol,
-                "Entry": round(entry_price,2),
-                "Current Price": round(latest_price,2),
-                "Stop": round(stop_price,2),
-                "Profit %": round(profit_pct*100,2),
-                "Distance to Stop %": round(distance_to_stop*100,2),
+                "Entry": round(entry_price, 2),
+                "Current Price": round(latest_price, 2),
+                "Stop": round(stop_price, 2),
+                "Profit %": round(profit_pct * 100, 2),
+                "Distance to Stop %": round(distance_to_stop * 100, 2),
                 "Trailing Phase": trailing_phase
             })
 
@@ -187,13 +198,15 @@ if st.button("Run NIFTY 50 Scan"):
             )
 
             top_trade = filtered.iloc[0]
-
             active_trades = get_active_trades()
             weekly_count = get_weekly_trade_count()
 
-            # Safety Checks
+            # SAFETY CHECKS
             if st.session_state.system_mode != "ACTIVE":
                 st.warning("System is paused. No trade executed.")
+
+            elif not market_bullish:
+                st.error("Market below 200 DMA. New trades blocked.")
 
             elif len(active_trades) >= 4:
                 st.warning("Max active trades reached.")

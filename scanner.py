@@ -113,3 +113,18 @@ def scan_nifty50():
     df = pd.DataFrame(results)
     df = df.sort_values(by="confidence", ascending=False)
     return df
+
+def market_is_bullish():
+    import yfinance as yf
+    import ta
+
+    data = yf.download("^NSEI", period="1y", interval="1d", auto_adjust=True)
+
+    if len(data) < 200:
+        return False
+
+    data["EMA200"] = ta.trend.ema_indicator(data["Close"], window=200)
+
+    latest = data.iloc[-1]
+
+    return latest["Close"] > latest["EMA200"]
