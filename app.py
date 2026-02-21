@@ -76,7 +76,32 @@ if active_trades:
     st.dataframe(active_trades, use_container_width=True)
 else:
     st.write("No active trades")
+import yfinance as yf
+from database import close_trade
 
+# -------------------------------
+# STOP MONITORING
+# -------------------------------
+
+if active_trades:
+    st.markdown("### Stop Monitoring")
+
+    for trade in active_trades:
+        trade_id = trade[0]
+        symbol = trade[1]
+        entry_price = trade[2]
+        stop_price = trade[3]
+        position_size = trade[4]
+
+        data = yf.download(symbol, period="5d", interval="1d", auto_adjust=True)
+
+        if not data.empty:
+            latest_price = float(data["Close"].iloc[-1])
+
+            if latest_price <= stop_price:
+                close_trade(trade_id)
+                st.error(f"Stop Hit — Trade Closed: {symbol}")
+                
 # -------------------------------
 # WEEKLY TRADE COUNT
 # -------------------------------

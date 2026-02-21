@@ -105,3 +105,15 @@ def get_weekly_trade_count():
     conn.close()
 
     return result[0] if result else 0
+def close_trade(trade_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    UPDATE trades
+    SET status='CLOSED'
+    WHERE id=?
+    """, (trade_id,))
+
+    conn.commit()
+    conn.close()
