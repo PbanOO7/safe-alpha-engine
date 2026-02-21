@@ -66,7 +66,7 @@ with colC:
 
 with colD:
     st.metric("Min Confidence", "72%")
-
+ 
 # -------------------------------
 # MARKET REGIME FILTER
 # -------------------------------
