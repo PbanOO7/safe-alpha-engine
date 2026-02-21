@@ -126,7 +126,6 @@ def get_all_trades():
     conn.close()
     return trades
 
-
 # -------------------------------
 # WEEKLY TRACKING
 # -------------------------------
