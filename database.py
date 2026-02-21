@@ -7,6 +7,7 @@ def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
+    # Trades table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS trades (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,6 +21,7 @@ def init_db():
     )
     """)
 
+    # Weekly trade stats
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS trade_stats (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,6 +29,19 @@ def init_db():
         trade_count INTEGER
     )
     """)
+
+    # Portfolio tracking
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS portfolio (
+        id INTEGER PRIMARY KEY,
+        peak_equity REAL
+    )
+    """)
+
+    # Initialize peak equity if not exists
+    cursor.execute("SELECT * FROM portfolio WHERE id=1")
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO portfolio (id, peak_equity) VALUES (1, ?)", (10000,))
 
     conn.commit()
     conn.close()
@@ -53,13 +68,39 @@ def add_trade(symbol, entry_price, stop_price, position_size, confidence):
     conn.close()
 
 
-def get_active_trades():
+def close_trade(trade_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
+    cursor.execute("""
+    UPDATE trades
+    SET status='CLOSED'
+    WHERE id=?
+    """, (trade_id,))
+
+    conn.commit()
+    conn.close()
+
+
+def update_stop(trade_id, new_stop):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    UPDATE trades
+    SET stop_price=?
+    WHERE id=?
+    """, (new_stop, trade_id))
+
+    conn.commit()
+    conn.close()
+
+
+def get_active_trades():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
     cursor.execute("SELECT * FROM trades WHERE status='ACTIVE'")
     trades = cursor.fetchall()
-
     conn.close()
     return trades
 
@@ -71,7 +112,6 @@ def get_week_number():
 def increment_weekly_trade():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-
     week = get_week_number()
 
     cursor.execute("SELECT * FROM trade_stats WHERE week_number=?", (week,))
@@ -96,37 +136,27 @@ def increment_weekly_trade():
 def get_weekly_trade_count():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-
     week = get_week_number()
 
     cursor.execute("SELECT trade_count FROM trade_stats WHERE week_number=?", (week,))
     result = cursor.fetchone()
-
     conn.close()
 
     return result[0] if result else 0
-def close_trade(trade_id):
+
+
+def get_peak_equity():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-
-    cursor.execute("""
-    UPDATE trades
-    SET status='CLOSED'
-    WHERE id=?
-    """, (trade_id,))
-
-    conn.commit()
+    cursor.execute("SELECT peak_equity FROM portfolio WHERE id=1")
+    result = cursor.fetchone()
     conn.close()
+    return result[0]
 
-def update_stop(trade_id, new_stop):
+
+def update_peak_equity(new_peak):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-
-    cursor.execute("""
-    UPDATE trades
-    SET stop_price=?
-    WHERE id=?
-    """, (new_stop, trade_id))
-
+    cursor.execute("UPDATE portfolio SET peak_equity=? WHERE id=1", (new_peak,))
     conn.commit()
     conn.close()
