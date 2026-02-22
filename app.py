@@ -30,7 +30,7 @@ dhan = dhanhq(
 )
 
 # -----------------------
-# BUILD SYMBOL MAP (NO CACHE)
+# BUILD SYMBOL MAP (Correct SEM Schema)
 # -----------------------
 def build_symbol_map():
 
@@ -39,27 +39,10 @@ def build_symbol_map():
 
     df.columns = df.columns.str.strip().str.upper()
 
-    # DEBUG — print real column names
-    st.write("Detected Columns:", df.columns.tolist())
+    # Filter NSE Equity
+    df = df[df["SEM_SEGMENT"] == "NSE_EQ"]
 
-    symbol_col = None
-    security_col = None
-    exchange_col = None
-
-    for col in df.columns:
-        if "SYMBOL" in col:
-            symbol_col = col
-        if "SECURITY" in col and "ID" in col:
-            security_col = col
-        if "EXCH" in col:
-            exchange_col = col
-
-    if symbol_col and security_col and exchange_col:
-        df = df[df[exchange_col] == "NSE_EQ"]
-        return dict(zip(df[symbol_col], df[security_col]))
-
-    st.error("Unable to detect correct columns in instrument file.")
-    return {}
+    return dict(zip(df["SEM_TRADING_SYMBOL"], df["SEM_SMST_SECURITY_ID"]))
 
 symbol_map = build_symbol_map()
 
@@ -101,6 +84,7 @@ if st.button("Run EOD Scan"):
             st.json(df)
             st.stop()
 
+        # Risk-based sizing
         risk_capital = BASE_CAPITAL * RISK_PER_TRADE
         stop_pct = (price - stop_price) / price
 
@@ -115,7 +99,9 @@ if st.button("Run EOD Scan"):
             st.warning("Quantity calculated as zero.")
             st.stop()
 
-        # BUY ORDER
+        # -----------------------
+        # PLACE BUY ORDER
+        # -----------------------
         buy = dhan.place_order(
             security_id=security_id,
             exchange_segment=dhan.NSE_EQ,
@@ -131,7 +117,9 @@ if st.button("Run EOD Scan"):
             st.json(buy)
             st.stop()
 
-        # STOP LOSS ORDER
+        # -----------------------
+        # PLACE STOP LOSS ORDER
+        # -----------------------
         stop = dhan.place_order(
             security_id=security_id,
             exchange_segment=dhan.NSE_EQ,
@@ -148,6 +136,9 @@ if st.button("Run EOD Scan"):
             st.json(stop)
             st.stop()
 
+        # -----------------------
+        # SAVE TRADE
+        # -----------------------
         add_trade(
             symbol=symbol,
             security_id=security_id,
@@ -162,7 +153,7 @@ if st.button("Run EOD Scan"):
         st.success(f"Trade Executed: {symbol} | Qty: {quantity}")
 
 # -----------------------
-# TRADE JOURNAL (DYNAMIC SCHEMA)
+# TRADE JOURNAL (Dynamic Schema Safe)
 # -----------------------
 st.markdown("## Trade Journal")
 
@@ -180,5 +171,5 @@ if trades:
     st.dataframe(df_trades)
 else:
     st.write("No trades yet.")
-    
+
 conn.close()
