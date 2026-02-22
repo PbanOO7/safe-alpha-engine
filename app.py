@@ -177,71 +177,90 @@ if st.button("Run EOD Scan"):
     if df.empty:
         st.warning("No valid setups today.")
     else:
-        top = df.iloc[0]
-
-        price = top["price"]
-        stop_price = top["stop_price"]
-        confidence = top["confidence"]
-        security_id = top["security_id"]
-        symbol = top["symbol"]
-
         risk_capital = BASE_CAPITAL * RISK_PER_TRADE
-        stop_pct = (price - stop_price) / price
-        if stop_pct <= 0:
-            st.error(f"Invalid stop for {symbol}: stop must be below entry price.")
-        else:
+        selected = None
+
+        for _, row in df.iterrows():
+            price = float(row["price"])
+            stop_price = float(row["stop_price"])
+            stop_pct = (price - stop_price) / price if price > 0 else -1
+            if stop_pct <= 0:
+                continue
+
             position_value = risk_capital / stop_pct
-            quantity = int(position_value / price)
+            quantity = int(position_value / price) if price > 0 else 0
             if quantity <= 0:
-                st.error(f"Computed quantity is zero for {symbol}. Skipping trade.")
+                continue
+
+            selected = {
+                "symbol": row["symbol"],
+                "security_id": row["security_id"],
+                "price": price,
+                "stop_price": stop_price,
+                "confidence": float(row["confidence"]),
+                "position_value": position_value,
+                "quantity": quantity,
+            }
+            break
+
+        if selected is None:
+            st.warning("No candidate fits current risk sizing (quantity computed as 0 for all setups).")
+        else:
+            symbol = selected["symbol"]
+            security_id = selected["security_id"]
+            price = selected["price"]
+            stop_price = selected["stop_price"]
+            confidence = selected["confidence"]
+            position_value = selected["position_value"]
+            quantity = selected["quantity"]
+
+            if live_mode:
+                try:
+                    buy = dhan.place_order(
+                        security_id=security_id,
+                        exchange_segment=EXCHANGE_EQ,
+                        transaction_type=dhan.BUY,
+                        quantity=quantity,
+                        order_type=dhan.MARKET,
+                        product_type=dhan.CNC,
+                        price=0
+                    )
+                    buy_id = buy.get("orderId", "LIVE_BUY_FAIL") if isinstance(buy, dict) else "LIVE_BUY_FAIL"
+                except Exception as exc:
+                    st.error(f"Live BUY order failed for {symbol}: {exc}")
+                    buy_id = "LIVE_BUY_FAIL"
+
+                try:
+                    stop = dhan.place_order(
+                        security_id=security_id,
+                        exchange_segment=EXCHANGE_EQ,
+                        transaction_type=dhan.SELL,
+                        quantity=quantity,
+                        order_type=ORDER_TYPE_STOP,
+                        product_type=dhan.CNC,
+                        price=round(stop_price, 2),
+                        trigger_price=round(stop_price, 2)
+                    )
+                    stop_id = stop.get("orderId", "LIVE_STOP_FAIL") if isinstance(stop, dict) else "LIVE_STOP_FAIL"
+                except Exception as exc:
+                    st.error(f"Live STOP order failed for {symbol}: {exc}")
+                    stop_id = "LIVE_STOP_FAIL"
+
             else:
-                if live_mode:
-                    try:
-                        buy = dhan.place_order(
-                            security_id=security_id,
-                            exchange_segment=EXCHANGE_EQ,
-                            transaction_type=dhan.BUY,
-                            quantity=quantity,
-                            order_type=dhan.MARKET,
-                            product_type=dhan.CNC,
-                            price=0
-                        )
-                        buy_id = buy.get("orderId", "LIVE_BUY_FAIL") if isinstance(buy, dict) else "LIVE_BUY_FAIL"
-                    except Exception as exc:
-                        st.error(f"Live BUY order failed for {symbol}: {exc}")
-                        buy_id = "LIVE_BUY_FAIL"
+                buy_id = "PAPER_BUY"
+                stop_id = "PAPER_STOP"
+                st.info(f"Paper trade simulated: {symbol} | Qty: {quantity}")
 
-                    try:
-                        stop = dhan.place_order(
-                            security_id=security_id,
-                            exchange_segment=EXCHANGE_EQ,
-                            transaction_type=dhan.SELL,
-                            quantity=quantity,
-                            order_type=ORDER_TYPE_STOP,
-                            product_type=dhan.CNC,
-                            price=round(stop_price, 2),
-                            trigger_price=round(stop_price, 2)
-                        )
-                        stop_id = stop.get("orderId", "LIVE_STOP_FAIL") if isinstance(stop, dict) else "LIVE_STOP_FAIL"
-                    except Exception as exc:
-                        st.error(f"Live STOP order failed for {symbol}: {exc}")
-                        stop_id = "LIVE_STOP_FAIL"
-
-                else:
-                    buy_id = "PAPER_BUY"
-                    stop_id = "PAPER_STOP"
-                    st.info(f"Paper trade simulated: {symbol} | Qty: {quantity}")
-
-                add_trade(
-                    symbol,
-                    security_id,
-                    price,
-                    stop_price,
-                    position_value,
-                    confidence,
-                    buy_id,
-                    stop_id
-                )
+            add_trade(
+                symbol,
+                security_id,
+                price,
+                stop_price,
+                position_value,
+                confidence,
+                buy_id,
+                stop_id
+            )
 
 # -----------------------
 # JOURNAL
