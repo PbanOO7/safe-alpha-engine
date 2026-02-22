@@ -20,22 +20,66 @@ UNIVERSE = [
 ]
 
 
+def fetch_daily_history(dhan_client, security_id, from_date, to_date):
+    """Compatibility wrapper across dhanhq versions."""
+    if hasattr(dhan_client, "historical_data"):
+        return dhan_client.historical_data(
+            security_id=str(security_id),
+            exchange_segment=dhan_client.NSE_EQ,
+            instrument=dhan_client.EQUITY,
+            interval=dhan_client.DAY,
+            from_date=from_date,
+            to_date=to_date,
+        )
+
+    if hasattr(dhan_client, "historical_daily_data"):
+        return dhan_client.historical_daily_data(
+            security_id=str(security_id),
+            exchange_segment=dhan_client.NSE_EQ,
+            instrument_type=dhan_client.EQUITY,
+            from_date=from_date,
+            to_date=to_date,
+        )
+
+    raise AttributeError("No compatible historical daily data method found on dhanhq client.")
+
+
 def _to_candle_df(raw):
     """Normalize common Dhan historical_data response shapes into one DataFrame."""
     if not isinstance(raw, dict):
         return pd.DataFrame()
 
-    candles = None
-    if isinstance(raw.get("data"), dict):
-        candles = raw["data"].get("candles")
-    if candles is None:
-        candles = raw.get("candles")
-
-    if not candles:
+    payload = raw.get("data", raw)
+    if not isinstance(payload, dict):
         return pd.DataFrame()
 
-    cols = ["timestamp", "open", "high", "low", "close", "volume"]
-    df = pd.DataFrame(candles, columns=cols)
+    # Shape A: {"candles": [[ts, o, h, l, c, v], ...]}
+    candles = payload.get("candles")
+    if candles:
+        cols = ["timestamp", "open", "high", "low", "close", "volume"]
+        df = pd.DataFrame(candles, columns=cols)
+    else:
+        # Shape B: {"timestamp":[...], "open":[...], "high":[...], ...}
+        ts = payload.get("timestamp") or payload.get("start_Time") or payload.get("startTime") or []
+        opens = payload.get("open", [])
+        highs = payload.get("high", [])
+        lows = payload.get("low", [])
+        closes = payload.get("close", [])
+        volumes = payload.get("volume", [])
+        n = min(len(ts), len(opens), len(highs), len(lows), len(closes), len(volumes))
+        if n == 0:
+            return pd.DataFrame()
+        df = pd.DataFrame(
+            {
+                "timestamp": ts[:n],
+                "open": opens[:n],
+                "high": highs[:n],
+                "low": lows[:n],
+                "close": closes[:n],
+                "volume": volumes[:n],
+            }
+        )
+
     if df.empty:
         return df
 
@@ -71,11 +115,9 @@ def scan(dhan, symbol_map):
             continue
 
         try:
-            raw = dhan.historical_data(
+            raw = fetch_daily_history(
+                dhan_client=dhan,
                 security_id=security_id,
-                exchange_segment=dhan.NSE_EQ,
-                instrument=dhan.EQUITY,
-                interval=dhan.DAY,
                 from_date=from_date,
                 to_date=to_date,
             )

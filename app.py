@@ -11,7 +11,7 @@ from database import (
     get_all_trades,
     get_active_trades,
 )
-from scanner import scan
+from scanner import scan, fetch_daily_history
 
 BASE_CAPITAL = 10000
 RISK_PER_TRADE = 0.01
@@ -88,29 +88,25 @@ def build_symbol_map():
 def get_ltp(dhan_client, security_id):
     to_date = datetime.now().strftime("%Y-%m-%d")
     try:
-        raw = dhan_client.historical_data(
+        raw = fetch_daily_history(
+            dhan_client=dhan_client,
             security_id=str(security_id),
-            exchange_segment=dhan_client.NSE_EQ,
-            instrument=dhan_client.EQUITY,
-            interval=dhan_client.DAY,
             from_date=to_date,
             to_date=to_date,
         )
     except Exception:
         return None
 
-    candles = None
-    if isinstance(raw, dict):
-        if isinstance(raw.get("data"), dict):
-            candles = raw["data"].get("candles")
-        if candles is None:
-            candles = raw.get("candles")
-
-    if not candles:
-        return None
-
     try:
-        return float(candles[-1][4])
+        payload = raw.get("data", raw) if isinstance(raw, dict) else {}
+        if isinstance(payload, dict):
+            candles = payload.get("candles")
+            if candles:
+                return float(candles[-1][4])
+            closes = payload.get("close", [])
+            if closes:
+                return float(closes[-1])
+        return None
     except Exception:
         return None
 
