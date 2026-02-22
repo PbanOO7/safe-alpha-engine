@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import sqlite3
 from datetime import datetime
 from dhanhq import dhanhq
 from database import *
@@ -29,24 +30,23 @@ dhan = dhanhq(
 )
 
 # -----------------------
-# BUILD SYMBOL MAP (ROBUST VERSION)
+# BUILD SYMBOL MAP (ROBUST)
 # -----------------------
 @st.cache_data
 def build_symbol_map():
-
     url = "https://images.dhan.co/api-data/api-scrip-master.csv"
     df = pd.read_csv(url)
 
-    # Normalize column names
+    # Normalize columns
     df.columns = df.columns.str.strip().str.upper()
 
-    # Safely filter NSE_EQ
+    # Filter NSE_EQ safely
     if "EXCHANGE_SEGMENT" in df.columns:
         df = df[df["EXCHANGE_SEGMENT"] == "NSE_EQ"]
     elif "EXCH_SEG" in df.columns:
         df = df[df["EXCH_SEG"] == "NSE_EQ"]
 
-    # Build symbol → security_id mapping safely
+    # Build mapping
     if "TRADING_SYMBOL" in df.columns and "SECURITY_ID" in df.columns:
         return dict(zip(df["TRADING_SYMBOL"], df["SECURITY_ID"]))
     else:
@@ -157,18 +157,23 @@ if st.button("Run EOD Scan"):
         st.success(f"Trade Executed: {top['symbol']} | Qty: {quantity}")
 
 # -----------------------
-# TRADE JOURNAL
+# TRADE JOURNAL (Dynamic Schema Safe)
 # -----------------------
 st.markdown("## Trade Journal")
+
+conn = sqlite3.connect("trades.db")
+cursor = conn.cursor()
+
+cursor.execute("PRAGMA table_info(trades)")
+columns_info = cursor.fetchall()
+column_names = [col[1] for col in columns_info]
 
 trades = get_all_trades()
 
 if trades:
-    df_trades = pd.DataFrame(trades, columns=[
-        "id","symbol","security_id","entry_price","stop_price",
-        "position_size","confidence","status","entry_date",
-        "buy_order_id","stop_order_id","exit_price","pnl"
-    ])
+    df_trades = pd.DataFrame(trades, columns=column_names)
     st.dataframe(df_trades)
 else:
     st.write("No trades yet.")
+
+conn.close()
