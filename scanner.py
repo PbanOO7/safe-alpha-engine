@@ -70,7 +70,7 @@ def scan(dhan, symbol_map):
         ema50 = latest["EMA50"]
         atr = latest["ATR"]
 
-        score = 50
+        score = 90
 
         if price > ema20:
             score += 20
