@@ -3,7 +3,14 @@ import pandas as pd
 import sqlite3
 from datetime import datetime
 from dhanhq import dhanhq
-from database import *
+from database import (
+    init_db,
+    get_peak_equity,
+    update_peak_equity,
+    add_trade,
+    get_all_trades,
+    get_active_trades,
+)
 from scanner import scan
 
 BASE_CAPITAL = 10000
@@ -33,12 +40,71 @@ dhan = dhanhq(
 # -----------------------
 # SYMBOL MAP
 # -----------------------
+@st.cache_data(ttl=60 * 60)
 def build_symbol_map():
     url = "https://images.dhan.co/api-data/api-scrip-master.csv"
-    df = pd.read_csv(url, low_memory=False)
-    df.columns = df.columns.str.strip().str.upper()
-    df = df[df["SEM_SEGMENT"] == "NSE_EQ"]
-    return dict(zip(df["SEM_TRADING_SYMBOL"], df["SEM_SMST_SECURITY_ID"]))
+    try:
+        df = pd.read_csv(url, low_memory=False)
+        df.columns = df.columns.str.strip().str.upper()
+        df = df[df["SEM_SEGMENT"] == "NSE_EQ"]
+        return dict(zip(df["SEM_TRADING_SYMBOL"], df["SEM_SMST_SECURITY_ID"]))
+    except Exception as exc:
+        st.warning(f"Could not load symbol map from Dhan master CSV: {exc}")
+        return {}
+
+
+def get_ltp(dhan_client, security_id):
+    to_date = datetime.now().strftime("%Y-%m-%d")
+    try:
+        raw = dhan_client.historical_data(
+            security_id=str(security_id),
+            exchange_segment=dhan_client.NSE_EQ,
+            instrument=dhan_client.EQUITY,
+            interval=dhan_client.DAY,
+            from_date=to_date,
+            to_date=to_date,
+        )
+    except Exception:
+        return None
+
+    candles = None
+    if isinstance(raw, dict):
+        if isinstance(raw.get("data"), dict):
+            candles = raw["data"].get("candles")
+        if candles is None:
+            candles = raw.get("candles")
+
+    if not candles:
+        return None
+
+    try:
+        return float(candles[-1][4])
+    except Exception:
+        return None
+
+
+def estimate_equity(dhan_client):
+    equity = BASE_CAPITAL
+    pricing_errors = 0
+
+    for trade in get_active_trades():
+        # Table order from database.py:
+        # id, symbol, security_id, entry_price, stop_price, position_size, confidence, status, entry_date, buy_order_id, stop_order_id
+        security_id = trade[2]
+        entry_price = float(trade[3])
+        position_size = float(trade[5])
+        quantity = int(position_size / entry_price) if entry_price > 0 else 0
+        if quantity <= 0:
+            continue
+
+        ltp = get_ltp(dhan_client, security_id)
+        if ltp is None:
+            pricing_errors += 1
+            continue
+
+        equity += (ltp - entry_price) * quantity
+
+    return equity, pricing_errors
 
 symbol_map = build_symbol_map()
 
@@ -46,11 +112,17 @@ symbol_map = build_symbol_map()
 # PORTFOLIO STATUS
 # -----------------------
 peak = get_peak_equity()
-equity = BASE_CAPITAL
+equity, mtm_errors = estimate_equity(dhan)
+if equity > peak:
+    update_peak_equity(equity)
+    peak = equity
 drawdown = (peak - equity) / peak if peak > 0 else 0
 
 st.write(f"Peak Equity: ₹{peak}")
+st.write(f"Estimated Equity: ₹{round(equity, 2)}")
 st.write(f"Drawdown: {round(drawdown*100,2)}%")
+if mtm_errors > 0:
+    st.warning(f"MTM pricing unavailable for {mtm_errors} active trade(s). Equity is partially estimated.")
 
 if drawdown >= MAX_DRAWDOWN:
     st.error("Circuit breaker active")
@@ -93,30 +165,36 @@ if st.button("Run EOD Scan"):
                 st.error(f"Computed quantity is zero for {symbol}. Skipping trade.")
             else:
                 if live_mode:
+                    try:
+                        buy = dhan.place_order(
+                            security_id=security_id,
+                            exchange_segment=dhan.NSE_EQ,
+                            transaction_type=dhan.BUY,
+                            quantity=quantity,
+                            order_type=dhan.MARKET,
+                            product_type=dhan.CNC,
+                            price=0
+                        )
+                        buy_id = buy.get("orderId", "LIVE_BUY_FAIL") if isinstance(buy, dict) else "LIVE_BUY_FAIL"
+                    except Exception as exc:
+                        st.error(f"Live BUY order failed for {symbol}: {exc}")
+                        buy_id = "LIVE_BUY_FAIL"
 
-                    buy = dhan.place_order(
-                        security_id=security_id,
-                        exchange_segment=dhan.NSE_EQ,
-                        transaction_type=dhan.BUY,
-                        quantity=quantity,
-                        order_type=dhan.MARKET,
-                        product_type=dhan.CNC,
-                        price=0
-                    )
-
-                    stop = dhan.place_order(
-                        security_id=security_id,
-                        exchange_segment=dhan.NSE_EQ,
-                        transaction_type=dhan.SELL,
-                        quantity=quantity,
-                        order_type=dhan.STOP_LOSS,
-                        product_type=dhan.CNC,
-                        price=round(stop_price, 2),
-                        trigger_price=round(stop_price, 2)
-                    )
-
-                    buy_id = buy.get("orderId", "LIVE_BUY_FAIL")
-                    stop_id = stop.get("orderId", "LIVE_STOP_FAIL")
+                    try:
+                        stop = dhan.place_order(
+                            security_id=security_id,
+                            exchange_segment=dhan.NSE_EQ,
+                            transaction_type=dhan.SELL,
+                            quantity=quantity,
+                            order_type=dhan.STOP_LOSS,
+                            product_type=dhan.CNC,
+                            price=round(stop_price, 2),
+                            trigger_price=round(stop_price, 2)
+                        )
+                        stop_id = stop.get("orderId", "LIVE_STOP_FAIL") if isinstance(stop, dict) else "LIVE_STOP_FAIL"
+                    except Exception as exc:
+                        st.error(f"Live STOP order failed for {symbol}: {exc}")
+                        stop_id = "LIVE_STOP_FAIL"
 
                 else:
                     buy_id = "PAPER_BUY"
