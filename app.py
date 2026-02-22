@@ -42,12 +42,44 @@ dhan = dhanhq(
 # -----------------------
 @st.cache_data(ttl=60 * 60)
 def build_symbol_map():
+    def normalize_symbol(symbol):
+        s = str(symbol).strip().upper()
+        if s.endswith("-EQ"):
+            s = s[:-3]
+        return s
+
     url = "https://images.dhan.co/api-data/api-scrip-master.csv"
     try:
         df = pd.read_csv(url, low_memory=False)
         df.columns = df.columns.str.strip().str.upper()
-        df = df[df["SEM_SEGMENT"] == "NSE_EQ"]
-        return dict(zip(df["SEM_TRADING_SYMBOL"], df["SEM_SMST_SECURITY_ID"]))
+
+        if "SEM_SEGMENT" in df.columns:
+            segment = df["SEM_SEGMENT"].astype(str).str.strip().str.upper()
+            filtered = df[segment == "NSE_EQ"].copy()
+            if not filtered.empty:
+                df = filtered
+
+        symbol_col = None
+        for candidate in ["SEM_TRADING_SYMBOL", "SEM_CUSTOM_SYMBOL", "SEM_SYMBOL"]:
+            if candidate in df.columns:
+                symbol_col = candidate
+                break
+
+        if symbol_col is None or "SEM_SMST_SECURITY_ID" not in df.columns:
+            raise ValueError("Required symbol/security-id columns not found in scrip master CSV.")
+
+        mapping = {}
+        for _, row in df[[symbol_col, "SEM_SMST_SECURITY_ID"]].dropna().iterrows():
+            raw_symbol = str(row[symbol_col]).strip().upper()
+            security_id = str(row["SEM_SMST_SECURITY_ID"]).strip()
+            if not raw_symbol or not security_id:
+                continue
+
+            # Keep both the exact exchange symbol (e.g. RELIANCE-EQ) and normalized key (RELIANCE).
+            mapping[raw_symbol] = security_id
+            mapping[normalize_symbol(raw_symbol)] = security_id
+
+        return mapping
     except Exception as exc:
         st.warning(f"Could not load symbol map from Dhan master CSV: {exc}")
         return {}
