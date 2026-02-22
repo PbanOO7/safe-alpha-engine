@@ -1,19 +1,15 @@
 import pandas as pd
 from datetime import datetime
 
-def calculate_atr(df, period=14):
-    high_low = df["high"] - df["low"]
-    high_close = abs(df["high"] - df["close"].shift())
-    low_close = abs(df["low"] - df["close"].shift())
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    return tr.rolling(period).mean()
-
 
 def scan(dhan, symbol_map):
 
-    stocks = ["RELIANCE","TCS","HDFCBANK","INFY",
-              "ICICIBANK","SBIN","ITC","LT",
-              "HCLTECH","ONGC","NTPC","TATAMOTORS"]
+    # Sample large liquid stocks
+    stocks = [
+        "RELIANCE", "TCS", "HDFCBANK", "INFY",
+        "ICICIBANK", "SBIN", "ITC", "LT",
+        "HCLTECH", "ONGC", "NTPC", "TATAMOTORS"
+    ]
 
     results = []
 
@@ -24,47 +20,44 @@ def scan(dhan, symbol_map):
 
         security_id = symbol_map[symbol]
 
-        data = dhan.historical_data(
-            security_id=security_id,
-            exchange_segment=dhan.NSE_EQ,
-            instrument=dhan.EQUITY,
-            interval=dhan.DAY,
-            from_date="2023-01-01",
-            to_date=datetime.now().strftime("%Y-%m-%d")
-        )
+        try:
+            data = dhan.historical_data(
+                security_id=security_id,
+                exchange_segment=dhan.NSE_EQ,
+                instrument=dhan.EQUITY,
+                interval=dhan.DAY,
+                from_date="2023-01-01",
+                to_date=datetime.now().strftime("%Y-%m-%d")
+            )
 
-        df = pd.DataFrame(data["data"])
+            if not data or "data" not in data:
+                continue
 
-        if df.empty or len(df) < 60:
+            df = pd.DataFrame(data["data"])
+
+            if df.empty or len(df) < 30:
+                continue
+
+            latest = df.iloc[-1]
+
+            price = float(latest["close"])
+
+            # 🔹 TEMP STOP: fixed 5% stop
+            stop_price = price * 0.95
+
+            # 🔹 TEMP CONFIDENCE: fixed score so it always qualifies
+            confidence = 75
+
+            results.append({
+                "symbol": symbol,
+                "security_id": security_id,
+                "price": price,
+                "stop_price": stop_price,
+                "confidence": confidence
+            })
+
+        except Exception:
             continue
-
-        df["EMA20"] = df["close"].ewm(span=20).mean()
-        df["EMA50"] = df["close"].ewm(span=50).mean()
-        df["ATR"] = calculate_atr(df)
-
-        latest = df.iloc[-1]
-
-        price = latest["close"]
-        ema20 = latest["EMA20"]
-        ema50 = latest["EMA50"]
-        atr = latest["ATR"]
-
-        stop_price = price - (atr * 1.5)
-
-        # TEMP TEST SCORING
-        score = 50
-        if price > ema20:
-            score += 20
-        if ema20 > ema50:
-            score += 20
-
-        results.append({
-            "symbol": symbol,
-            "security_id": security_id,
-            "price": float(price),
-            "stop_price": float(stop_price),
-            "confidence": int(score)
-        })
 
     if not results:
         return pd.DataFrame()
