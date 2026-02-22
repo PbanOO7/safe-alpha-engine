@@ -35,6 +35,16 @@ def init_db():
     if not cursor.fetchone():
         cursor.execute("INSERT INTO portfolio (id, peak_equity) VALUES (1, ?)", (10000,))
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS app_state (
+        id INTEGER PRIMARY KEY,
+        kill_switch INTEGER
+    )
+    """)
+    cursor.execute("SELECT * FROM app_state WHERE id=1")
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO app_state (id, kill_switch) VALUES (1, 0)")
+
     conn.commit()
     conn.close()
 
@@ -94,3 +104,20 @@ def get_peak_equity():
     value = cursor.fetchone()[0]
     conn.close()
     return value
+
+
+def set_kill_switch(enabled):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE app_state SET kill_switch=? WHERE id=1", (1 if enabled else 0,))
+    conn.commit()
+    conn.close()
+
+
+def get_kill_switch():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT kill_switch FROM app_state WHERE id=1")
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row[0]) if row else False

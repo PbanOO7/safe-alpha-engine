@@ -10,6 +10,8 @@ from database import (
     add_trade,
     get_all_trades,
     get_active_trades,
+    get_kill_switch,
+    set_kill_switch,
 )
 from scanner import scan, fetch_daily_history
 
@@ -19,19 +21,23 @@ MAX_DRAWDOWN = 0.08
 
 st.set_page_config(layout="wide")
 st.title("Safe Alpha Engine — EOD Mode")
+init_db()
 
 # -----------------------
 # LIVE / PAPER TOGGLE
 # -----------------------
 live_mode = st.toggle("Live Trading Mode", value=False)
 allow_min_qty_fallback = st.toggle("Allow 1-share fallback if risk sizing is 0", value=True)
+manual_kill_active = get_kill_switch()
+manual_kill_toggle = st.toggle("Manual Kill Switch (block new trades)", value=manual_kill_active)
+if manual_kill_toggle != manual_kill_active:
+    set_kill_switch(manual_kill_toggle)
+    manual_kill_active = manual_kill_toggle
 
 if live_mode:
     st.success("LIVE MODE ENABLED — Real orders will be placed.")
 else:
     st.warning("Paper Mode — No real orders will be placed.")
-
-init_db()
 
 dhan = dhanhq(
     st.secrets["DHAN_CLIENT_ID"],
@@ -156,14 +162,17 @@ st.write(f"Drawdown: {round(drawdown*100,2)}%")
 if mtm_errors > 0:
     st.warning(f"MTM pricing unavailable for {mtm_errors} active trade(s). Equity is partially estimated.")
 
-if drawdown >= MAX_DRAWDOWN:
-    st.error("Circuit breaker active")
-    st.stop()
+auto_circuit_active = drawdown >= MAX_DRAWDOWN
+if auto_circuit_active:
+    st.error("Auto circuit breaker active (drawdown limit breached).")
+if manual_kill_active:
+    st.error("Manual kill switch is ON. New trades are blocked.")
+trading_blocked = auto_circuit_active or manual_kill_active
 
 # -----------------------
 # EOD SCAN
 # -----------------------
-if st.button("Run EOD Scan"):
+if st.button("Run EOD Scan", disabled=trading_blocked):
 
     df, diagnostics_df = scan(dhan, symbol_map)
     if not diagnostics_df.empty:

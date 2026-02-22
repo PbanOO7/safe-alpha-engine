@@ -1,25 +1,23 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 
-MIN_CANDLES = 30
-BREAKOUT_LOOKBACK = 20
-STOP_LOOKBACK = 5
-STRICT_VOLUME_MULTIPLIER = 1.2
-RELAXED_VOLUME_MULTIPLIER = 0.9
-RELAXED_BREAKOUT_TOLERANCE = 0.995  # allow close within 0.5% of breakout level
+HISTORY_START = "2023-01-01"
+MIN_CANDLES = 200
+SCORE_THRESHOLD = 70
 
-# A compact, liquid NSE universe to keep API calls practical for EOD scans.
 UNIVERSE = [
     "RELIANCE",
     "TCS",
-    "INFY",
     "HDFCBANK",
+    "INFY",
     "ICICIBANK",
     "SBIN",
     "ITC",
     "LT",
-    "BHARTIARTL",
-    "KOTAKBANK",
+    "HCLTECH",
+    "ONGC",
+    "NTPC",
+    "TATAMOTORS",
 ]
 
 
@@ -95,11 +93,38 @@ def _to_candle_df(raw):
     return df
 
 
-def _confidence_score(price, prev_high, volume, avg_volume):
-    breakout_strength = max(0.0, (price - prev_high) / prev_high) if prev_high > 0 else 0.0
-    volume_boost = max(0.0, (volume / avg_volume) - 1.0) if avg_volume > 0 else 0.0
-    score = (breakout_strength * 1000) + (volume_boost * 30)
-    return round(min(99.0, max(1.0, score)), 2)
+def calculate_atr(df, period=14):
+    high_low = df["high"] - df["low"]
+    high_close = (df["high"] - df["close"].shift()).abs()
+    low_close = (df["low"] - df["close"].shift()).abs()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
+
+def is_bullish_engulfing(df):
+    if len(df) < 2:
+        return False
+    prev = df.iloc[-2]
+    curr = df.iloc[-1]
+    return (
+        curr["close"] > curr["open"]
+        and prev["close"] < prev["open"]
+        and curr["close"] > prev["open"]
+        and curr["open"] < prev["close"]
+    )
+
+
+def resolve_security_id(symbol_map, symbol):
+    candidates = [
+        symbol,
+        str(symbol).upper(),
+        f"{str(symbol).upper()}-EQ",
+    ]
+    for key in candidates:
+        sec = symbol_map.get(key)
+        if sec:
+            return sec
+    return None
 
 
 def scan(dhan, symbol_map):
@@ -112,10 +137,38 @@ def scan(dhan, symbol_map):
         diagnostics.append(row)
 
     to_date = datetime.now().strftime("%Y-%m-%d")
-    from_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+    from_date = HISTORY_START
+
+    # ---------------------------
+    # MARKET REGIME CHECK
+    # ---------------------------
+    regime_score = 0
+    nifty_id = None
+    for idx_name in ["NIFTY", "NIFTY50", "NIFTY 50"]:
+        nifty_id = resolve_security_id(symbol_map, idx_name)
+        if nifty_id:
+            break
+
+    if nifty_id:
+        try:
+            raw_nifty = fetch_daily_history(
+                dhan_client=dhan,
+                security_id=nifty_id,
+                from_date=from_date,
+                to_date=to_date,
+            )
+            nifty_df = _to_candle_df(raw_nifty)
+            if len(nifty_df) >= 200:
+                nifty_df["EMA200"] = nifty_df["close"].ewm(span=200, adjust=False).mean()
+                if nifty_df.iloc[-1]["close"] > nifty_df.iloc[-1]["EMA200"]:
+                    regime_score = 20
+        except Exception as exc:
+            log("NIFTY", "error", "regime_fetch_failed", message=str(exc))
+    else:
+        log("NIFTY", "skipped", "regime_symbol_missing")
 
     for symbol in UNIVERSE:
-        security_id = symbol_map.get(symbol)
+        security_id = resolve_security_id(symbol_map, symbol)
         if not security_id:
             log(symbol, "skipped", "missing_security_id")
             continue
@@ -136,55 +189,81 @@ def scan(dhan, symbol_map):
             log(symbol, "skipped", "insufficient_candles", candles=int(len(df)))
             continue
 
+        df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
+        df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
+        df["EMA200"] = df["close"].ewm(span=200, adjust=False).mean()
+        df["ATR"] = calculate_atr(df)
+        df["VOL_AVG"] = df["volume"].rolling(20).mean()
+        df["HIGH20_PREV"] = df["high"].shift(1).rolling(20).max()
+        df["SWING_LOW10"] = df["low"].rolling(10).min()
+
         latest = df.iloc[-1]
-        previous = df.iloc[:-1]
-        prev_high = previous["high"].tail(BREAKOUT_LOOKBACK).max()
-        avg_volume = previous["volume"].tail(BREAKOUT_LOOKBACK).mean()
+        price = float(latest["close"])
+        ema20 = float(latest["EMA20"]) if pd.notna(latest["EMA20"]) else None
+        ema50 = float(latest["EMA50"]) if pd.notna(latest["EMA50"]) else None
+        ema200 = float(latest["EMA200"]) if pd.notna(latest["EMA200"]) else None
+        atr = float(latest["ATR"]) if pd.notna(latest["ATR"]) else None
+        vol_avg = float(latest["VOL_AVG"]) if pd.notna(latest["VOL_AVG"]) else None
+        high20_prev = float(latest["HIGH20_PREV"]) if pd.notna(latest["HIGH20_PREV"]) else None
+        swing_low = float(latest["SWING_LOW10"]) if pd.notna(latest["SWING_LOW10"]) else None
+        volume = float(latest["volume"])
 
-        is_breakout_strict = latest["close"] > prev_high
-        has_volume_strict = latest["volume"] > (avg_volume * STRICT_VOLUME_MULTIPLIER if avg_volume > 0 else 0)
+        if None in (ema20, ema50, ema200, atr, vol_avg, high20_prev, swing_low):
+            log(symbol, "skipped", "indicator_nan")
+            continue
 
-        is_breakout_relaxed = latest["close"] >= (prev_high * RELAXED_BREAKOUT_TOLERANCE if prev_high > 0 else 0)
-        has_volume_relaxed = latest["volume"] > (avg_volume * RELAXED_VOLUME_MULTIPLIER if avg_volume > 0 else 0)
+        score = regime_score
 
-        strict_pass = is_breakout_strict and has_volume_strict
-        relaxed_pass = is_breakout_relaxed and has_volume_relaxed
-        if not (strict_pass or relaxed_pass):
+        trend_ok = price > ema20 > ema50 > ema200
+        breakout_ok = price > high20_prev
+        atr_ok = (atr / price) < 0.03 if price > 0 else False
+        volume_ok = volume > (1.5 * vol_avg) if vol_avg > 0 else False
+        pattern_ok = is_bullish_engulfing(df)
+
+        if trend_ok:
+            score += 25
+        if breakout_ok:
+            score += 20
+        if atr_ok:
+            score += 15
+        if volume_ok:
+            score += 10
+        if pattern_ok:
+            score += 10
+
+        if score < SCORE_THRESHOLD:
             log(
                 symbol,
                 "skipped",
                 "setup_conditions_not_met",
-                breakout=bool(is_breakout_strict),
-                volume_confirmed=bool(has_volume_strict),
-                relaxed_breakout=bool(is_breakout_relaxed),
-                relaxed_volume_confirmed=bool(has_volume_relaxed),
+                score=int(score),
+                trend_ok=bool(trend_ok),
+                breakout_ok=bool(breakout_ok),
+                atr_ok=bool(atr_ok),
+                volume_ok=bool(volume_ok),
+                pattern_ok=bool(pattern_ok),
             )
             continue
 
-        stop_price = previous["low"].tail(STOP_LOOKBACK).min()
-        if stop_price <= 0 or stop_price >= latest["close"]:
-            log(symbol, "skipped", "invalid_stop", stop_price=float(stop_price), close=float(latest["close"]))
+        stop_price = min(swing_low, price - (atr * 1.5))
+        if stop_price <= 0 or stop_price >= price:
+            log(symbol, "skipped", "invalid_stop", stop_price=float(stop_price), close=float(price))
             continue
 
         candidate = {
             "symbol": symbol,
             "security_id": str(security_id),
-            "price": round(float(latest["close"]), 2),
+            "price": round(price, 2),
             "stop_price": round(float(stop_price), 2),
-            "confidence": _confidence_score(
-                float(latest["close"]),
-                float(prev_high),
-                float(latest["volume"]),
-                float(avg_volume) if pd.notna(avg_volume) else 0.0,
-            ),
-            "signal_strength": "strict" if strict_pass else "relaxed",
+            "confidence": int(score),
+            "signal_strength": "strict" if score >= 85 else "relaxed",
         }
         candidates.append(candidate)
         log(
             symbol,
             "selected",
             "candidate_found",
-            confidence=float(candidate["confidence"]),
+            confidence=int(candidate["confidence"]),
             signal_strength=candidate["signal_strength"],
         )
 
