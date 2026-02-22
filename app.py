@@ -61,7 +61,15 @@ if drawdown >= MAX_DRAWDOWN:
 # -----------------------
 if st.button("Run EOD Scan"):
 
-    df = scan(dhan, symbol_map)
+    df, diagnostics_df = scan(dhan, symbol_map)
+    if not diagnostics_df.empty:
+        with st.expander("Scan Diagnostics", expanded=True):
+            total = len(diagnostics_df)
+            selected = int((diagnostics_df["status"] == "selected").sum())
+            skipped = int((diagnostics_df["status"] == "skipped").sum())
+            errors = int((diagnostics_df["status"] == "error").sum())
+            st.write(f"Total symbols checked: {total} | Selected: {selected} | Skipped: {skipped} | Errors: {errors}")
+            st.dataframe(diagnostics_df, use_container_width=True)
 
     if df.empty:
         st.warning("No valid setups today.")
@@ -76,51 +84,55 @@ if st.button("Run EOD Scan"):
 
         risk_capital = BASE_CAPITAL * RISK_PER_TRADE
         stop_pct = (price - stop_price) / price
-
-        position_value = risk_capital / stop_pct
-        quantity = int(position_value / price)
-
-        if live_mode:
-
-            buy = dhan.place_order(
-                security_id=security_id,
-                exchange_segment=dhan.NSE_EQ,
-                transaction_type=dhan.BUY,
-                quantity=quantity,
-                order_type=dhan.MARKET,
-                product_type=dhan.CNC,
-                price=0
-            )
-
-            stop = dhan.place_order(
-                security_id=security_id,
-                exchange_segment=dhan.NSE_EQ,
-                transaction_type=dhan.SELL,
-                quantity=quantity,
-                order_type=dhan.STOP_LOSS,
-                product_type=dhan.CNC,
-                price=round(stop_price, 2),
-                trigger_price=round(stop_price, 2)
-            )
-
-            buy_id = buy.get("orderId", "LIVE_BUY_FAIL")
-            stop_id = stop.get("orderId", "LIVE_STOP_FAIL")
-
+        if stop_pct <= 0:
+            st.error(f"Invalid stop for {symbol}: stop must be below entry price.")
         else:
-            buy_id = "PAPER_BUY"
-            stop_id = "PAPER_STOP"
-            st.info(f"Paper trade simulated: {symbol} | Qty: {quantity}")
+            position_value = risk_capital / stop_pct
+            quantity = int(position_value / price)
+            if quantity <= 0:
+                st.error(f"Computed quantity is zero for {symbol}. Skipping trade.")
+            else:
+                if live_mode:
 
-        add_trade(
-            symbol,
-            security_id,
-            price,
-            stop_price,
-            position_value,
-            confidence,
-            buy_id,
-            stop_id
-        )
+                    buy = dhan.place_order(
+                        security_id=security_id,
+                        exchange_segment=dhan.NSE_EQ,
+                        transaction_type=dhan.BUY,
+                        quantity=quantity,
+                        order_type=dhan.MARKET,
+                        product_type=dhan.CNC,
+                        price=0
+                    )
+
+                    stop = dhan.place_order(
+                        security_id=security_id,
+                        exchange_segment=dhan.NSE_EQ,
+                        transaction_type=dhan.SELL,
+                        quantity=quantity,
+                        order_type=dhan.STOP_LOSS,
+                        product_type=dhan.CNC,
+                        price=round(stop_price, 2),
+                        trigger_price=round(stop_price, 2)
+                    )
+
+                    buy_id = buy.get("orderId", "LIVE_BUY_FAIL")
+                    stop_id = stop.get("orderId", "LIVE_STOP_FAIL")
+
+                else:
+                    buy_id = "PAPER_BUY"
+                    stop_id = "PAPER_STOP"
+                    st.info(f"Paper trade simulated: {symbol} | Qty: {quantity}")
+
+                add_trade(
+                    symbol,
+                    security_id,
+                    price,
+                    stop_price,
+                    position_value,
+                    confidence,
+                    buy_id,
+                    stop_id
+                )
 
 # -----------------------
 # JOURNAL
