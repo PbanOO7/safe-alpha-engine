@@ -37,6 +37,9 @@ dhan = dhanhq(
     st.secrets["DHAN_ACCESS_TOKEN"]
 )
 
+EXCHANGE_EQ = getattr(dhan, "NSE_EQ", getattr(dhan, "NSE", "NSE_EQ"))
+ORDER_TYPE_STOP = getattr(dhan, "STOP_LOSS", getattr(dhan, "SL", "STOP_LOSS"))
+
 # -----------------------
 # SYMBOL MAP
 # -----------------------
@@ -196,7 +199,7 @@ if st.button("Run EOD Scan"):
                     try:
                         buy = dhan.place_order(
                             security_id=security_id,
-                            exchange_segment=dhan.NSE_EQ,
+                            exchange_segment=EXCHANGE_EQ,
                             transaction_type=dhan.BUY,
                             quantity=quantity,
                             order_type=dhan.MARKET,
@@ -211,10 +214,10 @@ if st.button("Run EOD Scan"):
                     try:
                         stop = dhan.place_order(
                             security_id=security_id,
-                            exchange_segment=dhan.NSE_EQ,
+                            exchange_segment=EXCHANGE_EQ,
                             transaction_type=dhan.SELL,
                             quantity=quantity,
-                            order_type=dhan.STOP_LOSS,
+                            order_type=ORDER_TYPE_STOP,
                             product_type=dhan.CNC,
                             price=round(stop_price, 2),
                             trigger_price=round(stop_price, 2)

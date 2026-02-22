@@ -22,11 +22,14 @@ UNIVERSE = [
 
 def fetch_daily_history(dhan_client, security_id, from_date, to_date):
     """Compatibility wrapper across dhanhq versions."""
+    exchange_eq = getattr(dhan_client, "NSE_EQ", getattr(dhan_client, "NSE", "NSE_EQ"))
+    instrument_equity = getattr(dhan_client, "EQUITY", "EQUITY")
+
     if hasattr(dhan_client, "historical_data"):
         return dhan_client.historical_data(
             security_id=str(security_id),
-            exchange_segment=dhan_client.NSE_EQ,
-            instrument=dhan_client.EQUITY,
+            exchange_segment=exchange_eq,
+            instrument=instrument_equity,
             interval=dhan_client.DAY,
             from_date=from_date,
             to_date=to_date,
@@ -35,8 +38,8 @@ def fetch_daily_history(dhan_client, security_id, from_date, to_date):
     if hasattr(dhan_client, "historical_daily_data"):
         return dhan_client.historical_daily_data(
             security_id=str(security_id),
-            exchange_segment=dhan_client.NSE_EQ,
-            instrument_type=dhan_client.EQUITY,
+            exchange_segment=exchange_eq,
+            instrument_type=instrument_equity,
             from_date=from_date,
             to_date=to_date,
         )
