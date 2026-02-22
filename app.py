@@ -30,23 +30,20 @@ dhan = dhanhq(
 )
 
 # -----------------------
-# BUILD SYMBOL MAP (ROBUST)
+# BUILD SYMBOL MAP
 # -----------------------
 @st.cache_data
 def build_symbol_map():
     url = "https://images.dhan.co/api-data/api-scrip-master.csv"
     df = pd.read_csv(url)
 
-    # Normalize columns
     df.columns = df.columns.str.strip().str.upper()
 
-    # Filter NSE_EQ safely
     if "EXCHANGE_SEGMENT" in df.columns:
         df = df[df["EXCHANGE_SEGMENT"] == "NSE_EQ"]
     elif "EXCH_SEG" in df.columns:
         df = df[df["EXCH_SEG"] == "NSE_EQ"]
 
-    # Build mapping
     if "TRADING_SYMBOL" in df.columns and "SECURITY_ID" in df.columns:
         return dict(zip(df["TRADING_SYMBOL"], df["SECURITY_ID"]))
     else:
@@ -58,10 +55,8 @@ symbol_map = build_symbol_map()
 # -----------------------
 # PORTFOLIO STATUS
 # -----------------------
-active_trades = get_active_trades()
 peak = get_peak_equity()
-
-equity = BASE_CAPITAL  # EOD simplification
+equity = BASE_CAPITAL  # simplified EOD assumption
 drawdown = (peak - equity) / peak if peak > 0 else 0
 
 st.write(f"Peak Equity: ₹{peak}")
@@ -78,15 +73,25 @@ if st.button("Run EOD Scan"):
 
     df = scan(dhan, symbol_map)
 
-    if df.empty:
+    if df is None or df.empty:
         st.warning("No valid setups today.")
     else:
+
+        # Debug safeguard (optional)
+        # st.write("Scanner Columns:", df.columns)
+
         top = df.iloc[0]
 
-        price = top["price"]
-        stop_price = top["stop_price"]
-        confidence = top["confidence"]
-        security_id = top["security_id"]
+        price = top.get("price")
+        stop_price = top.get("stop_price")
+        confidence = top.get("confidence", 0)
+        security_id = top.get("security_id")
+        symbol = top.get("symbol")
+
+        if price is None or stop_price is None or security_id is None:
+            st.error("Scanner output format mismatch.")
+            st.json(df)
+            st.stop()
 
         # Risk-based sizing
         risk_capital = BASE_CAPITAL * RISK_PER_TRADE
@@ -144,7 +149,7 @@ if st.button("Run EOD Scan"):
         # SAVE TRADE
         # -----------------------
         add_trade(
-            symbol=top["symbol"],
+            symbol=symbol,
             security_id=security_id,
             entry_price=price,
             stop_price=stop_price,
@@ -154,10 +159,10 @@ if st.button("Run EOD Scan"):
             stop_id=stop["orderId"]
         )
 
-        st.success(f"Trade Executed: {top['symbol']} | Qty: {quantity}")
+        st.success(f"Trade Executed: {symbol} | Qty: {quantity}")
 
 # -----------------------
-# TRADE JOURNAL (Dynamic Schema Safe)
+# TRADE JOURNAL (Schema Safe)
 # -----------------------
 st.markdown("## Trade Journal")
 
