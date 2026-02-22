@@ -70,16 +70,16 @@ def scan(dhan, symbol_map):
         ema50 = latest["EMA50"]
         atr = latest["ATR"]
 
-        score = 0
+        score = 50
 
         if price > ema20:
             score += 20
         if ema20 > ema50:
             score += 20
-        if atr / price < 0.03:
-            score += 20
-        if pattern == "BULLISH_ENGULFING":
-            score += 40
+      #  if atr / price < 0.03:
+       #     score += 20
+        # if pattern == "BULLISH_ENGULFING":
+          #  score += 40
 
         stop_price = price - (atr * 1.5)
 
