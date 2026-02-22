@@ -20,9 +20,7 @@ def init_db():
         status TEXT,
         entry_date TEXT,
         buy_order_id TEXT,
-        stop_order_id TEXT,
-        exit_price REAL,
-        pnl REAL
+        stop_order_id TEXT
     )
     """)
 

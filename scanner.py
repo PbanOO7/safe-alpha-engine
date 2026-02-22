@@ -9,25 +9,6 @@ def calculate_atr(df, period=14):
     return tr.rolling(period).mean()
 
 
-def detect_pattern(df):
-    latest = df.iloc[-1]
-    prev = df.iloc[-2]
-
-    body = abs(latest["close"] - latest["open"])
-    candle_range = latest["high"] - latest["low"]
-
-    if body < candle_range * 0.1:
-        return "DOJI"
-
-    if (prev["close"] < prev["open"] and
-        latest["close"] > latest["open"] and
-        latest["close"] > prev["open"] and
-        latest["open"] < prev["close"]):
-        return "BULLISH_ENGULFING"
-
-    return "NONE"
-
-
 def scan(dhan, symbol_map):
 
     stocks = ["RELIANCE","TCS","HDFCBANK","INFY",
@@ -61,8 +42,6 @@ def scan(dhan, symbol_map):
         df["EMA50"] = df["close"].ewm(span=50).mean()
         df["ATR"] = calculate_atr(df)
 
-        pattern = detect_pattern(df)
-
         latest = df.iloc[-1]
 
         price = latest["close"]
@@ -70,34 +49,27 @@ def scan(dhan, symbol_map):
         ema50 = latest["EMA50"]
         atr = latest["ATR"]
 
-        score = 90
+        stop_price = price - (atr * 1.5)
 
+        # TEMP TEST SCORING
+        score = 50
         if price > ema20:
             score += 20
         if ema20 > ema50:
             score += 20
-      #  if atr / price < 0.03:
-       #     score += 20
-        # if pattern == "BULLISH_ENGULFING":
-          #  score += 40
-
-        stop_price = price - (atr * 1.5)
 
         results.append({
             "symbol": symbol,
             "security_id": security_id,
             "price": float(price),
             "stop_price": float(stop_price),
-            "confidence": int(score)   # <- THIS IS CRITICAL
+            "confidence": int(score)
         })
 
     if not results:
         return pd.DataFrame()
 
     df_results = pd.DataFrame(results)
-
-    # Ensure confidence exists before sorting
-    if "confidence" in df_results.columns:
-        df_results = df_results.sort_values("confidence", ascending=False)
+    df_results = df_results.sort_values("confidence", ascending=False)
 
     return df_results

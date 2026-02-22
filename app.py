@@ -6,9 +6,6 @@ from dhanhq import dhanhq
 from database import *
 from scanner import scan
 
-# -----------------------
-# CONFIG
-# -----------------------
 BASE_CAPITAL = 10000
 RISK_PER_TRADE = 0.01
 MAX_DRAWDOWN = 0.08
@@ -17,7 +14,7 @@ st.set_page_config(layout="wide")
 st.title("Safe Alpha Engine — EOD Mode")
 
 # -----------------------
-# TRADE MODE TOGGLE
+# LIVE / PAPER TOGGLE
 # -----------------------
 live_mode = st.toggle("Live Trading Mode", value=False)
 
@@ -26,32 +23,21 @@ if live_mode:
 else:
     st.warning("Paper Mode — No real orders will be placed.")
 
-# -----------------------
-# INIT DATABASE
-# -----------------------
 init_db()
 
-# -----------------------
-# INIT DHAN SDK
-# -----------------------
 dhan = dhanhq(
     st.secrets["DHAN_CLIENT_ID"],
     st.secrets["DHAN_ACCESS_TOKEN"]
 )
 
 # -----------------------
-# BUILD SYMBOL MAP
+# SYMBOL MAP
 # -----------------------
 def build_symbol_map():
-
     url = "https://images.dhan.co/api-data/api-scrip-master.csv"
-    df = pd.read_csv(url)
-
+    df = pd.read_csv(url, low_memory=False)
     df.columns = df.columns.str.strip().str.upper()
-
-    # Filter NSE Equity
     df = df[df["SEM_SEGMENT"] == "NSE_EQ"]
-
     return dict(zip(df["SEM_TRADING_SYMBOL"], df["SEM_SMST_SECURITY_ID"]))
 
 symbol_map = build_symbol_map()
@@ -67,51 +53,33 @@ st.write(f"Peak Equity: ₹{peak}")
 st.write(f"Drawdown: {round(drawdown*100,2)}%")
 
 if drawdown >= MAX_DRAWDOWN:
-    st.error("⚠ Circuit Breaker Active — Max Drawdown Hit")
+    st.error("Circuit breaker active")
     st.stop()
 
 # -----------------------
-# RUN EOD SCAN
+# EOD SCAN
 # -----------------------
 if st.button("Run EOD Scan"):
 
     df = scan(dhan, symbol_map)
 
-    if df is None or df.empty:
+    if df.empty:
         st.warning("No valid setups today.")
     else:
-
         top = df.iloc[0]
 
-        price = top.get("price")
-        stop_price = top.get("stop_price")
-        confidence = top.get("confidence", 0)
-        security_id = top.get("security_id")
-        symbol = top.get("symbol")
+        price = top["price"]
+        stop_price = top["stop_price"]
+        confidence = top["confidence"]
+        security_id = top["security_id"]
+        symbol = top["symbol"]
 
-        if price is None or stop_price is None or security_id is None:
-            st.error("Scanner output format mismatch.")
-            st.json(df)
-            st.stop()
-
-        # Risk-based sizing
         risk_capital = BASE_CAPITAL * RISK_PER_TRADE
         stop_pct = (price - stop_price) / price
-
-        if stop_pct <= 0:
-            st.warning("Invalid stop calculation.")
-            st.stop()
 
         position_value = risk_capital / stop_pct
         quantity = int(position_value / price)
 
-        if quantity <= 0:
-            st.warning("Quantity calculated as zero.")
-            st.stop()
-
-        # -----------------------
-        # EXECUTION BLOCK
-        # -----------------------
         if live_mode:
 
             buy = dhan.place_order(
@@ -124,11 +92,6 @@ if st.button("Run EOD Scan"):
                 price=0
             )
 
-            if "orderId" not in buy:
-                st.error("Buy order failed.")
-                st.json(buy)
-                st.stop()
-
             stop = dhan.place_order(
                 security_id=security_id,
                 exchange_segment=dhan.NSE_EQ,
@@ -140,36 +103,27 @@ if st.button("Run EOD Scan"):
                 trigger_price=round(stop_price, 2)
             )
 
-            if "orderId" not in stop:
-                st.error("Stop order failed.")
-                st.json(stop)
-                st.stop()
-
-            buy_id = buy["orderId"]
-            stop_id = stop["orderId"]
-
-            st.success(f"Live Trade Executed: {symbol} | Qty: {quantity}")
+            buy_id = buy.get("orderId", "LIVE_BUY_FAIL")
+            stop_id = stop.get("orderId", "LIVE_STOP_FAIL")
 
         else:
-            # PAPER TRADE
             buy_id = "PAPER_BUY"
             stop_id = "PAPER_STOP"
             st.info(f"Paper trade simulated: {symbol} | Qty: {quantity}")
 
-        # Save trade
         add_trade(
-            symbol=symbol,
-            security_id=security_id,
-            entry_price=price,
-            stop_price=stop_price,
-            position_size=position_value,
-            confidence=confidence,
-            buy_id=buy_id,
-            stop_id=stop_id
+            symbol,
+            security_id,
+            price,
+            stop_price,
+            position_value,
+            confidence,
+            buy_id,
+            stop_id
         )
 
 # -----------------------
-# TRADE JOURNAL
+# JOURNAL
 # -----------------------
 st.markdown("## Trade Journal")
 
