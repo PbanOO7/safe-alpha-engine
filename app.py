@@ -180,5 +180,5 @@ if trades:
     st.dataframe(df_trades)
 else:
     st.write("No trades yet.")
-
+    
 conn.close()
