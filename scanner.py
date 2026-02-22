@@ -1,7 +1,5 @@
 import pandas as pd
 from datetime import datetime
-from dhanhq import dhanhq
-
 
 def calculate_atr(df, period=14):
     high_low = df["high"] - df["low"]
@@ -32,13 +30,13 @@ def detect_pattern(df):
 
 def scan(dhan, symbol_map):
 
-    nifty = ["RELIANCE","TCS","HDFCBANK","INFY",
-             "ICICIBANK","SBIN","ITC","LT",
-             "HCLTECH","ONGC","NTPC","TATAMOTORS"]
+    stocks = ["RELIANCE","TCS","HDFCBANK","INFY",
+              "ICICIBANK","SBIN","ITC","LT",
+              "HCLTECH","ONGC","NTPC","TATAMOTORS"]
 
     results = []
 
-    for symbol in nifty:
+    for symbol in stocks:
 
         if symbol not in symbol_map:
             continue
@@ -55,6 +53,7 @@ def scan(dhan, symbol_map):
         )
 
         df = pd.DataFrame(data["data"])
+
         if df.empty or len(df) < 60:
             continue
 
@@ -87,9 +86,18 @@ def scan(dhan, symbol_map):
         results.append({
             "symbol": symbol,
             "security_id": security_id,
-            "price": price,
-            "stop_price": stop_price,
-            "confidence": min(score,100)
+            "price": float(price),
+            "stop_price": float(stop_price),
+            "confidence": int(score)   # <- THIS IS CRITICAL
         })
 
-    return pd.DataFrame(results).sort_values("confidence", ascending=False)
+    if not results:
+        return pd.DataFrame()
+
+    df_results = pd.DataFrame(results)
+
+    # Ensure confidence exists before sorting
+    if "confidence" in df_results.columns:
+        df_results = df_results.sort_values("confidence", ascending=False)
+
+    return df_results
