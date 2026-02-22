@@ -24,6 +24,7 @@ st.title("Safe Alpha Engine — EOD Mode")
 # LIVE / PAPER TOGGLE
 # -----------------------
 live_mode = st.toggle("Live Trading Mode", value=False)
+allow_min_qty_fallback = st.toggle("Allow 1-share fallback if risk sizing is 0", value=True)
 
 if live_mode:
     st.success("LIVE MODE ENABLED — Real orders will be placed.")
@@ -204,8 +205,37 @@ if st.button("Run EOD Scan"):
             break
 
         if selected is None:
-            st.warning("No candidate fits current risk sizing (quantity computed as 0 for all setups).")
-        else:
+            fallback = None
+            for _, row in df.iterrows():
+                price = float(row["price"])
+                stop_price = float(row["stop_price"])
+                if price <= 0 or stop_price <= 0 or stop_price >= price:
+                    continue
+                if price > BASE_CAPITAL:
+                    continue
+                fallback = {
+                    "symbol": row["symbol"],
+                    "security_id": row["security_id"],
+                    "price": price,
+                    "stop_price": stop_price,
+                    "confidence": float(row["confidence"]),
+                    "position_value": price,
+                    "quantity": 1,
+                    "signal_strength": row.get("signal_strength", "unknown"),
+                }
+                break
+
+            if fallback is None or not allow_min_qty_fallback:
+                st.warning("No candidate fits current risk sizing (quantity computed as 0 for all setups).")
+            else:
+                selected = fallback
+                per_share_risk = selected["price"] - selected["stop_price"]
+                st.warning(
+                    f"Using 1-share fallback for {selected['symbol']} (signal: {selected['signal_strength']}). "
+                    f"Per-share risk ₹{round(per_share_risk, 2)} exceeds risk budget ₹{round(risk_capital, 2)}."
+                )
+
+        if selected is not None:
             symbol = selected["symbol"]
             security_id = selected["security_id"]
             price = selected["price"]
