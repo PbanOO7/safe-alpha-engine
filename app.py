@@ -16,27 +16,42 @@ st.set_page_config(layout="wide")
 st.title("Safe Alpha Engine — EOD Mode")
 
 # -----------------------
-# INIT
+# INIT DATABASE
 # -----------------------
 init_db()
 
+# -----------------------
+# INIT DHAN SDK
+# -----------------------
 dhan = dhanhq(
     st.secrets["DHAN_CLIENT_ID"],
     st.secrets["DHAN_ACCESS_TOKEN"]
 )
 
 # -----------------------
-# BUILD SYMBOL MAP (Official CSV)
+# BUILD SYMBOL MAP (ROBUST VERSION)
 # -----------------------
 @st.cache_data
 def build_symbol_map():
+
     url = "https://images.dhan.co/api-data/api-scrip-master.csv"
     df = pd.read_csv(url)
 
-    # Only NSE Equity
-    df = df[df["EXCH_SEG"] == "NSE_EQ"]
+    # Normalize column names
+    df.columns = df.columns.str.strip().str.upper()
 
-    return dict(zip(df["TRADING_SYMBOL"], df["SECURITY_ID"]))
+    # Safely filter NSE_EQ
+    if "EXCHANGE_SEGMENT" in df.columns:
+        df = df[df["EXCHANGE_SEGMENT"] == "NSE_EQ"]
+    elif "EXCH_SEG" in df.columns:
+        df = df[df["EXCH_SEG"] == "NSE_EQ"]
+
+    # Build symbol → security_id mapping safely
+    if "TRADING_SYMBOL" in df.columns and "SECURITY_ID" in df.columns:
+        return dict(zip(df["TRADING_SYMBOL"], df["SECURITY_ID"]))
+    else:
+        st.error("Instrument CSV format changed.")
+        return {}
 
 symbol_map = build_symbol_map()
 
@@ -46,7 +61,7 @@ symbol_map = build_symbol_map()
 active_trades = get_active_trades()
 peak = get_peak_equity()
 
-equity = BASE_CAPITAL  # EOD model assumes flat until close update
+equity = BASE_CAPITAL  # EOD simplification
 drawdown = (peak - equity) / peak if peak > 0 else 0
 
 st.write(f"Peak Equity: ₹{peak}")
@@ -57,7 +72,7 @@ if drawdown >= MAX_DRAWDOWN:
     st.stop()
 
 # -----------------------
-# EOD SCAN
+# RUN EOD SCAN
 # -----------------------
 if st.button("Run EOD Scan"):
 
@@ -73,7 +88,7 @@ if st.button("Run EOD Scan"):
         confidence = top["confidence"]
         security_id = top["security_id"]
 
-        # Risk-based position sizing
+        # Risk-based sizing
         risk_capital = BASE_CAPITAL * RISK_PER_TRADE
         stop_pct = (price - stop_price) / price
 
@@ -154,7 +169,6 @@ if trades:
         "position_size","confidence","status","entry_date",
         "buy_order_id","stop_order_id","exit_price","pnl"
     ])
-
     st.dataframe(df_trades)
 else:
     st.write("No trades yet.")
