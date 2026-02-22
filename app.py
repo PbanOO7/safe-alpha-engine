@@ -30,25 +30,36 @@ dhan = dhanhq(
 )
 
 # -----------------------
-# BUILD SYMBOL MAP
+# BUILD SYMBOL MAP (NO CACHE)
 # -----------------------
-@st.cache_data
 def build_symbol_map():
+
     url = "https://images.dhan.co/api-data/api-scrip-master.csv"
     df = pd.read_csv(url)
 
     df.columns = df.columns.str.strip().str.upper()
 
-    if "EXCHANGE_SEGMENT" in df.columns:
-        df = df[df["EXCHANGE_SEGMENT"] == "NSE_EQ"]
-    elif "EXCH_SEG" in df.columns:
-        df = df[df["EXCH_SEG"] == "NSE_EQ"]
+    # DEBUG — print real column names
+    st.write("Detected Columns:", df.columns.tolist())
 
-    if "TRADING_SYMBOL" in df.columns and "SECURITY_ID" in df.columns:
-        return dict(zip(df["TRADING_SYMBOL"], df["SECURITY_ID"]))
-    else:
-        st.error("Instrument CSV format changed.")
-        return {}
+    symbol_col = None
+    security_col = None
+    exchange_col = None
+
+    for col in df.columns:
+        if "SYMBOL" in col:
+            symbol_col = col
+        if "SECURITY" in col and "ID" in col:
+            security_col = col
+        if "EXCH" in col:
+            exchange_col = col
+
+    if symbol_col and security_col and exchange_col:
+        df = df[df[exchange_col] == "NSE_EQ"]
+        return dict(zip(df[symbol_col], df[security_col]))
+
+    st.error("Unable to detect correct columns in instrument file.")
+    return {}
 
 symbol_map = build_symbol_map()
 
@@ -56,7 +67,7 @@ symbol_map = build_symbol_map()
 # PORTFOLIO STATUS
 # -----------------------
 peak = get_peak_equity()
-equity = BASE_CAPITAL  # simplified EOD assumption
+equity = BASE_CAPITAL
 drawdown = (peak - equity) / peak if peak > 0 else 0
 
 st.write(f"Peak Equity: ₹{peak}")
@@ -77,9 +88,6 @@ if st.button("Run EOD Scan"):
         st.warning("No valid setups today.")
     else:
 
-        # Debug safeguard (optional)
-        # st.write("Scanner Columns:", df.columns)
-
         top = df.iloc[0]
 
         price = top.get("price")
@@ -93,7 +101,6 @@ if st.button("Run EOD Scan"):
             st.json(df)
             st.stop()
 
-        # Risk-based sizing
         risk_capital = BASE_CAPITAL * RISK_PER_TRADE
         stop_pct = (price - stop_price) / price
 
@@ -108,9 +115,7 @@ if st.button("Run EOD Scan"):
             st.warning("Quantity calculated as zero.")
             st.stop()
 
-        # -----------------------
-        # PLACE BUY ORDER
-        # -----------------------
+        # BUY ORDER
         buy = dhan.place_order(
             security_id=security_id,
             exchange_segment=dhan.NSE_EQ,
@@ -126,9 +131,7 @@ if st.button("Run EOD Scan"):
             st.json(buy)
             st.stop()
 
-        # -----------------------
-        # PLACE STOP LOSS ORDER
-        # -----------------------
+        # STOP LOSS ORDER
         stop = dhan.place_order(
             security_id=security_id,
             exchange_segment=dhan.NSE_EQ,
@@ -145,9 +148,6 @@ if st.button("Run EOD Scan"):
             st.json(stop)
             st.stop()
 
-        # -----------------------
-        # SAVE TRADE
-        # -----------------------
         add_trade(
             symbol=symbol,
             security_id=security_id,
@@ -162,7 +162,7 @@ if st.button("Run EOD Scan"):
         st.success(f"Trade Executed: {symbol} | Qty: {quantity}")
 
 # -----------------------
-# TRADE JOURNAL (Schema Safe)
+# TRADE JOURNAL (DYNAMIC SCHEMA)
 # -----------------------
 st.markdown("## Trade Journal")
 
