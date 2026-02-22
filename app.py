@@ -17,6 +17,16 @@ st.set_page_config(layout="wide")
 st.title("Safe Alpha Engine — EOD Mode")
 
 # -----------------------
+# TRADE MODE TOGGLE
+# -----------------------
+live_mode = st.toggle("Live Trading Mode", value=False)
+
+if live_mode:
+    st.success("LIVE MODE ENABLED — Real orders will be placed.")
+else:
+    st.warning("Paper Mode — No real orders will be placed.")
+
+# -----------------------
 # INIT DATABASE
 # -----------------------
 init_db()
@@ -30,7 +40,7 @@ dhan = dhanhq(
 )
 
 # -----------------------
-# BUILD SYMBOL MAP (Correct SEM Schema)
+# BUILD SYMBOL MAP
 # -----------------------
 def build_symbol_map():
 
@@ -100,45 +110,53 @@ if st.button("Run EOD Scan"):
             st.stop()
 
         # -----------------------
-        # PLACE BUY ORDER
+        # EXECUTION BLOCK
         # -----------------------
-        buy = dhan.place_order(
-            security_id=security_id,
-            exchange_segment=dhan.NSE_EQ,
-            transaction_type=dhan.BUY,
-            quantity=quantity,
-            order_type=dhan.MARKET,
-            product_type=dhan.CNC,
-            price=0
-        )
+        if live_mode:
 
-        if "orderId" not in buy:
-            st.error("Buy order failed.")
-            st.json(buy)
-            st.stop()
+            buy = dhan.place_order(
+                security_id=security_id,
+                exchange_segment=dhan.NSE_EQ,
+                transaction_type=dhan.BUY,
+                quantity=quantity,
+                order_type=dhan.MARKET,
+                product_type=dhan.CNC,
+                price=0
+            )
 
-        # -----------------------
-        # PLACE STOP LOSS ORDER
-        # -----------------------
-        stop = dhan.place_order(
-            security_id=security_id,
-            exchange_segment=dhan.NSE_EQ,
-            transaction_type=dhan.SELL,
-            quantity=quantity,
-            order_type=dhan.STOP_LOSS,
-            product_type=dhan.CNC,
-            price=round(stop_price, 2),
-            trigger_price=round(stop_price, 2)
-        )
+            if "orderId" not in buy:
+                st.error("Buy order failed.")
+                st.json(buy)
+                st.stop()
 
-        if "orderId" not in stop:
-            st.error("Stop order failed.")
-            st.json(stop)
-            st.stop()
+            stop = dhan.place_order(
+                security_id=security_id,
+                exchange_segment=dhan.NSE_EQ,
+                transaction_type=dhan.SELL,
+                quantity=quantity,
+                order_type=dhan.STOP_LOSS,
+                product_type=dhan.CNC,
+                price=round(stop_price, 2),
+                trigger_price=round(stop_price, 2)
+            )
 
-        # -----------------------
-        # SAVE TRADE
-        # -----------------------
+            if "orderId" not in stop:
+                st.error("Stop order failed.")
+                st.json(stop)
+                st.stop()
+
+            buy_id = buy["orderId"]
+            stop_id = stop["orderId"]
+
+            st.success(f"Live Trade Executed: {symbol} | Qty: {quantity}")
+
+        else:
+            # PAPER TRADE
+            buy_id = "PAPER_BUY"
+            stop_id = "PAPER_STOP"
+            st.info(f"Paper trade simulated: {symbol} | Qty: {quantity}")
+
+        # Save trade
         add_trade(
             symbol=symbol,
             security_id=security_id,
@@ -146,14 +164,12 @@ if st.button("Run EOD Scan"):
             stop_price=stop_price,
             position_size=position_value,
             confidence=confidence,
-            buy_id=buy["orderId"],
-            stop_id=stop["orderId"]
+            buy_id=buy_id,
+            stop_id=stop_id
         )
 
-        st.success(f"Trade Executed: {symbol} | Qty: {quantity}")
-
 # -----------------------
-# TRADE JOURNAL (Dynamic Schema Safe)
+# TRADE JOURNAL
 # -----------------------
 st.markdown("## Trade Journal")
 
