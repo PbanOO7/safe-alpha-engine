@@ -4,6 +4,9 @@ import pandas as pd
 MIN_CANDLES = 30
 BREAKOUT_LOOKBACK = 20
 STOP_LOOKBACK = 5
+STRICT_VOLUME_MULTIPLIER = 1.2
+RELAXED_VOLUME_MULTIPLIER = 0.9
+RELAXED_BREAKOUT_TOLERANCE = 0.995  # allow close within 0.5% of breakout level
 
 # A compact, liquid NSE universe to keep API calls practical for EOD scans.
 UNIVERSE = [
@@ -138,15 +141,23 @@ def scan(dhan, symbol_map):
         prev_high = previous["high"].tail(BREAKOUT_LOOKBACK).max()
         avg_volume = previous["volume"].tail(BREAKOUT_LOOKBACK).mean()
 
-        is_breakout = latest["close"] > prev_high
-        has_volume = latest["volume"] > (avg_volume * 1.2 if avg_volume > 0 else 0)
-        if not (is_breakout and has_volume):
+        is_breakout_strict = latest["close"] > prev_high
+        has_volume_strict = latest["volume"] > (avg_volume * STRICT_VOLUME_MULTIPLIER if avg_volume > 0 else 0)
+
+        is_breakout_relaxed = latest["close"] >= (prev_high * RELAXED_BREAKOUT_TOLERANCE if prev_high > 0 else 0)
+        has_volume_relaxed = latest["volume"] > (avg_volume * RELAXED_VOLUME_MULTIPLIER if avg_volume > 0 else 0)
+
+        strict_pass = is_breakout_strict and has_volume_strict
+        relaxed_pass = is_breakout_relaxed and has_volume_relaxed
+        if not (strict_pass or relaxed_pass):
             log(
                 symbol,
                 "skipped",
                 "setup_conditions_not_met",
-                breakout=bool(is_breakout),
-                volume_confirmed=bool(has_volume),
+                breakout=bool(is_breakout_strict),
+                volume_confirmed=bool(has_volume_strict),
+                relaxed_breakout=bool(is_breakout_relaxed),
+                relaxed_volume_confirmed=bool(has_volume_relaxed),
             )
             continue
 
@@ -166,12 +177,21 @@ def scan(dhan, symbol_map):
                 float(latest["volume"]),
                 float(avg_volume) if pd.notna(avg_volume) else 0.0,
             ),
+            "signal_strength": "strict" if strict_pass else "relaxed",
         }
         candidates.append(candidate)
-        log(symbol, "selected", "candidate_found", confidence=float(candidate["confidence"]))
+        log(
+            symbol,
+            "selected",
+            "candidate_found",
+            confidence=float(candidate["confidence"]),
+            signal_strength=candidate["signal_strength"],
+        )
 
     if not candidates:
-        df_candidates = pd.DataFrame(columns=["symbol", "security_id", "price", "stop_price", "confidence"])
+        df_candidates = pd.DataFrame(
+            columns=["symbol", "security_id", "price", "stop_price", "confidence", "signal_strength"]
+        )
     else:
         df_candidates = pd.DataFrame(candidates).sort_values("confidence", ascending=False).reset_index(drop=True)
 
