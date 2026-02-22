@@ -1,139 +1,107 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
-import requests
-from datetime import datetime
-
-from scanner import scan_nifty50, market_is_bullish
+from dhanhq import dhanhq
 from database import *
+from scanner import scan
 
 BASE_CAPITAL = 10000
+RISK_PER_TRADE = 0.01
+MAX_DRAWDOWN = 0.08
 
-st.set_page_config(page_title="Safe Alpha Engine", layout="wide")
+st.set_page_config(layout="wide")
+st.title("Safe Alpha Engine — EOD Mode")
+
 init_db()
 
-st.title("Safe Alpha Engine Dashboard")
+dhan = dhanhq(
+    st.secrets["DHAN_CLIENT_ID"],
+    st.secrets["DHAN_ACCESS_TOKEN"]
+)
 
-# ---------------- LIVE MODE ----------------
-if "live_mode" not in st.session_state:
-    st.session_state.live_mode = False
+@st.cache_data
+def build_symbol_map():
+    instruments = dhan.get_instruments()
+    df = pd.DataFrame(instruments)
+    df = df[df["exchangeSegment"] == "NSE_EQ"]
+    return dict(zip(df["tradingSymbol"], df["securityId"]))
 
-live_toggle = st.checkbox("Enable LIVE Trading (Real Orders)", value=False)
+symbol_map = build_symbol_map()
 
-if live_toggle:
-    st.session_state.live_mode = True
-    st.error("LIVE MODE ENABLED")
-else:
-    st.session_state.live_mode = False
-    st.success("Simulation Mode")
+# -----------------------
+# Drawdown Check
+# -----------------------
+active_trades = get_active_trades()
+peak = get_peak_equity()
 
-# ---------------- ORDER FUNCTIONS ----------------
-def place_dhan_order(symbol, quantity):
-    url = "https://api.dhan.co/v2/orders"
-    headers = {
-        "Content-Type": "application/json",
-        "access-token": st.secrets["DHAN_ACCESS_TOKEN"]
-    }
+equity = BASE_CAPITAL
+drawdown = (peak - equity) / peak
 
-    payload = {
-        "dhanClientId": st.secrets["DHAN_CLIENT_ID"],
-        "transactionType": "BUY",
-        "exchangeSegment": "NSE_EQ",
-        "productType": "CNC",
-        "orderType": "MARKET",
-        "securityId": symbol.replace(".NS",""),
-        "quantity": quantity
-    }
+if drawdown >= MAX_DRAWDOWN:
+    st.error("Circuit breaker active — drawdown exceeded")
+    st.stop()
 
-    response = requests.post(url, json=payload, headers=headers)
-    return response.status_code, response.json()
+# -----------------------
+# Scan Button
+# -----------------------
+if st.button("Run EOD Scan"):
 
+    df = scan(dhan, symbol_map)
 
-def place_stop_order(symbol, quantity, stop_price):
-    url = "https://api.dhan.co/v2/orders"
-    headers = {
-        "Content-Type": "application/json",
-        "access-token": st.secrets["DHAN_ACCESS_TOKEN"]
-    }
+    if df.empty:
+        st.warning("No setups today")
+    else:
+        top = df.iloc[0]
 
-    payload = {
-        "dhanClientId": st.secrets["DHAN_CLIENT_ID"],
-        "transactionType": "SELL",
-        "exchangeSegment": "NSE_EQ",
-        "productType": "CNC",
-        "orderType": "STOP_LOSS",
-        "securityId": symbol.replace(".NS",""),
-        "quantity": quantity,
-        "price": round(stop_price,2),
-        "triggerPrice": round(stop_price,2)
-    }
+        risk_capital = BASE_CAPITAL * RISK_PER_TRADE
+        stop_pct = (top["price"] - top["stop_price"]) / top["price"]
+        position_size = risk_capital / stop_pct
 
-    response = requests.post(url, json=payload, headers=headers)
-    return response.status_code, response.json()
+        quantity = int(position_size / top["price"])
 
+        buy = dhan.place_order(
+            security_id=top["security_id"],
+            exchange_segment=dhan.NSE_EQ,
+            transaction_type=dhan.BUY,
+            quantity=quantity,
+            order_type=dhan.MARKET,
+            product_type=dhan.CNC,
+            price=0
+        )
 
-def modify_dhan_order(order_id, new_stop):
-    url = f"https://api.dhan.co/v2/orders/{order_id}"
-    headers = {
-        "Content-Type": "application/json",
-        "access-token": st.secrets["DHAN_ACCESS_TOKEN"]
-    }
-    payload = {
-        "price": round(new_stop,2),
-        "triggerPrice": round(new_stop,2)
-    }
+        stop = dhan.place_order(
+            security_id=top["security_id"],
+            exchange_segment=dhan.NSE_EQ,
+            transaction_type=dhan.SELL,
+            quantity=quantity,
+            order_type=dhan.STOP_LOSS,
+            product_type=dhan.CNC,
+            price=top["stop_price"],
+            trigger_price=top["stop_price"]
+        )
 
-    response = requests.put(url, json=payload, headers=headers)
-    return response.status_code, response.json()
+        add_trade(
+            top["symbol"],
+            top["security_id"],
+            top["price"],
+            top["stop_price"],
+            position_size,
+            top["confidence"],
+            buy["orderId"],
+            stop["orderId"]
+        )
 
+        st.success(f"Trade Executed: {top['symbol']}")
 
-# ---------------- SCANNER + EXECUTION ----------------
-if st.button("Run NIFTY 50 Scan"):
+# -----------------------
+# Journal
+# -----------------------
+st.markdown("## Trade Journal")
+trades = get_all_trades()
 
-    df = scan_nifty50()
-    filtered = df[df["confidence"] >= 72]
-
-    if not filtered.empty:
-        top = filtered.iloc[0]
-        quantity = int(top["position_size"] / top["price"])
-
-        if st.session_state.live_mode:
-            status, resp = place_dhan_order(top["symbol"], quantity)
-
-            if status == 200:
-                buy_id = resp.get("orderId")
-
-                stop_status, stop_resp = place_stop_order(
-                    top["symbol"],
-                    quantity,
-                    top["stop_price"]
-                )
-
-                if stop_status == 200:
-                    stop_id = stop_resp.get("orderId")
-
-                    add_trade(
-                        symbol=top["symbol"],
-                        entry_price=top["price"],
-                        stop_price=top["stop_price"],
-                        position_size=top["position_size"],
-                        confidence=top["confidence"],
-                        buy_id=buy_id,
-                        stop_id=stop_id
-                    )
-
-                    st.success("LIVE Trade + Stop Placed")
-
-                else:
-                    st.error("Stop order failed")
-            else:
-                st.error("Buy failed")
-        else:
-            add_trade(
-                symbol=top["symbol"],
-                entry_price=top["price"],
-                stop_price=top["stop_price"],
-                position_size=top["position_size"],
-                confidence=top["confidence"]
-            )
-            st.success("Simulated trade executed")
+if trades:
+    df = pd.DataFrame(trades, columns=[
+        "id","symbol","security_id","entry_price","stop_price",
+        "position_size","confidence","status","entry_date",
+        "buy_order_id","stop_order_id","exit_price","pnl"
+    ])
+    st.dataframe(df)

@@ -1,115 +1,95 @@
-import yfinance as yf
 import pandas as pd
-import ta
+from datetime import datetime
+from dhanhq import dhanhq
 
 
-# -------------------------------------------------
-# MARKET REGIME CHECK (NIFTY 200 EMA)
-# -------------------------------------------------
-
-def market_is_bullish():
-    try:
-        data = yf.download("^NSEI", period="1y", interval="1d",
-                           auto_adjust=True, progress=False)
-
-        if data is None or len(data) < 200:
-            return False
-
-        data["EMA200"] = ta.trend.ema_indicator(data["Close"], window=200)
-
-        latest = data.iloc[-1]
-
-        return float(latest["Close"]) > float(latest["EMA200"])
-
-    except Exception:
-        return False
+def calculate_atr(df, period=14):
+    high_low = df["high"] - df["low"]
+    high_close = abs(df["high"] - df["close"].shift())
+    low_close = abs(df["low"] - df["close"].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
 
 
-# -------------------------------------------------
-# NIFTY 50 SCANNER (Batch + Safe)
-# -------------------------------------------------
+def detect_pattern(df):
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
 
-def scan_nifty50():
+    body = abs(latest["close"] - latest["open"])
+    candle_range = latest["high"] - latest["low"]
 
-    nifty50 = [
-        "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS",
-        "ICICIBANK.NS","SBIN.NS","ITC.NS","LT.NS",
-        "HINDUNILVR.NS","BHARTIARTL.NS","KOTAKBANK.NS",
-        "BAJFINANCE.NS","ASIANPAINT.NS","MARUTI.NS",
-        "AXISBANK.NS","HCLTECH.NS","SUNPHARMA.NS",
-        "ULTRACEMCO.NS","TITAN.NS","ONGC.NS",
-        "NTPC.NS","TATAMOTORS.NS","POWERGRID.NS",
-        "ADANIENT.NS","COALINDIA.NS"
-    ]
+    if body < candle_range * 0.1:
+        return "DOJI"
 
-    try:
-        data = yf.download(
-            nifty50,
-            period="6mo",
-            group_by="ticker",
-            auto_adjust=True,
-            progress=False
-        )
-    except Exception:
-        return pd.DataFrame()
+    if (prev["close"] < prev["open"] and
+        latest["close"] > latest["open"] and
+        latest["close"] > prev["open"] and
+        latest["open"] < prev["close"]):
+        return "BULLISH_ENGULFING"
+
+    return "NONE"
+
+
+def scan(dhan, symbol_map):
+
+    nifty = ["RELIANCE","TCS","HDFCBANK","INFY",
+             "ICICIBANK","SBIN","ITC","LT",
+             "HCLTECH","ONGC","NTPC","TATAMOTORS"]
 
     results = []
 
-    # Handle case where only 1 ticker returned
-    if isinstance(data.columns, pd.MultiIndex) is False:
-        return pd.DataFrame()
+    for symbol in nifty:
 
-    available_symbols = data.columns.get_level_values(0).unique()
-
-    for symbol in nifty50:
-
-        if symbol not in available_symbols:
+        if symbol not in symbol_map:
             continue
 
-        df = data[symbol].copy()
+        security_id = symbol_map[symbol]
 
-        if df.empty or len(df) < 50:
+        data = dhan.historical_data(
+            security_id=security_id,
+            exchange_segment=dhan.NSE_EQ,
+            instrument=dhan.EQUITY,
+            interval=dhan.DAY,
+            from_date="2023-01-01",
+            to_date=datetime.now().strftime("%Y-%m-%d")
+        )
+
+        df = pd.DataFrame(data["data"])
+        if df.empty or len(df) < 60:
             continue
 
-        try:
-            df["EMA20"] = ta.trend.ema_indicator(df["Close"], window=20)
-            df["EMA50"] = ta.trend.ema_indicator(df["Close"], window=50)
-        except Exception:
-            continue
+        df["EMA20"] = df["close"].ewm(span=20).mean()
+        df["EMA50"] = df["close"].ewm(span=50).mean()
+        df["ATR"] = calculate_atr(df)
+
+        pattern = detect_pattern(df)
 
         latest = df.iloc[-1]
 
-        price = float(latest["Close"])
-        ema20 = float(latest["EMA20"])
-        ema50 = float(latest["EMA50"])
+        price = latest["close"]
+        ema20 = latest["EMA20"]
+        ema50 = latest["EMA50"]
+        atr = latest["ATR"]
 
-        confidence = 50
+        score = 0
 
         if price > ema20:
-            confidence += 10
+            score += 20
         if ema20 > ema50:
-            confidence += 10
-        if price > ema50:
-            confidence += 5
+            score += 20
+        if atr / price < 0.03:
+            score += 20
+        if pattern == "BULLISH_ENGULFING":
+            score += 40
 
-        # Basic structural stop (4%)
-        stop_pct = 4
-        stop_price = price * (1 - stop_pct / 100)
-
-        # Position sizing (1% risk model)
-        risk_capital = 10000 * 0.01
-        position_size = risk_capital / (stop_pct / 100)
+        stop_price = price - (atr * 1.5)
 
         results.append({
             "symbol": symbol,
-            "price": round(price, 2),
-            "confidence": confidence,
-            "stop_price": round(stop_price, 2),
-            "stop_pct": stop_pct,
-            "position_size": round(position_size, 2)
+            "security_id": security_id,
+            "price": price,
+            "stop_price": stop_price,
+            "confidence": min(score,100)
         })
-
-    if len(results) == 0:
-        return pd.DataFrame()
 
     return pd.DataFrame(results).sort_values("confidence", ascending=False)
