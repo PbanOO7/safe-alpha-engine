@@ -391,9 +391,11 @@ if equity > peak:
     peak = equity
 drawdown = (peak - equity) / peak if peak > 0 else 0
 
-st.write(f"Peak Equity: ₹{peak}")
-st.write(f"Estimated Equity: ₹{round(equity, 2)}")
-st.write(f"Drawdown: {round(drawdown*100,2)}%")
+status_col1, status_col2, status_col3 = st.columns(3)
+status_col1.metric("Peak Equity", f"₹{round(peak, 2)}")
+status_col2.metric("Estimated Equity", f"₹{round(equity, 2)}")
+status_col3.metric("Drawdown", f"{round(drawdown * 100, 2)}%")
+
 if mtm_errors > 0:
     st.warning(f"MTM pricing unavailable for {mtm_errors} active trade(s). Equity is partially estimated.")
 
@@ -404,167 +406,160 @@ if manual_kill_active:
     st.error("Manual kill switch is ON. New trades are blocked.")
 trading_blocked = auto_circuit_active or manual_kill_active
 
-# -----------------------
-# PORTFOLIO RISK SCAN
-# -----------------------
-st.markdown("## Portfolio Risk Scan")
-if st.button("Run Portfolio Risk Scan"):
-    broker_positions, source_errors, unresolved_symbols = fetch_broker_portfolio_positions(dhan, symbol_map)
-    if source_errors:
-        st.warning(" | ".join(source_errors))
-    if unresolved_symbols:
-        st.warning(f"Could not resolve security_id for {len(unresolved_symbols)} broker position(s).")
+tab_eod, tab_risk, tab_journal = st.tabs(["EOD Buy Scan", "Portfolio Risk Scan", "Trade Journal"])
 
-    if not broker_positions:
-        st.info("No broker positions/holdings to scan.")
-    else:
-        risk_df = scan_portfolio_risk(dhan, broker_positions)
-        sell_count = int((risk_df["advice"] == "SELL").sum()) if not risk_df.empty else 0
-        hold_count = int((risk_df["advice"] == "HOLD").sum()) if not risk_df.empty else 0
-        st.write(f"Positions scanned: {len(risk_df)} | SELL alerts: {sell_count} | HOLD: {hold_count}")
-        if sell_count > 0:
-            st.error("Risk detected in one or more positions. Review SELL alerts.")
+with tab_eod:
+    st.caption("Runs the end-of-day opportunity scan and places paper/live buy + stop orders.")
+    if st.button("Run EOD Scan", disabled=trading_blocked, key="run_eod_scan"):
+        df, diagnostics_df = scan(dhan, symbol_map)
+        if not diagnostics_df.empty:
+            with st.expander("Scan Diagnostics", expanded=True):
+                total = len(diagnostics_df)
+                selected = int((diagnostics_df["status"] == "selected").sum())
+                skipped = int((diagnostics_df["status"] == "skipped").sum())
+                errors = int((diagnostics_df["status"] == "error").sum())
+                st.write(f"Total symbols checked: {total} | Selected: {selected} | Skipped: {skipped} | Errors: {errors}")
+                st.dataframe(diagnostics_df, use_container_width=True)
+
+        if df.empty:
+            st.warning("No valid setups today.")
         else:
-            st.success("No immediate sell alerts from current risk rules.")
-        st.dataframe(risk_df, use_container_width=True)
+            risk_capital = BASE_CAPITAL * RISK_PER_TRADE
+            selected = None
 
-# -----------------------
-# EOD SCAN
-# -----------------------
-if st.button("Run EOD Scan", disabled=trading_blocked):
-
-    df, diagnostics_df = scan(dhan, symbol_map)
-    if not diagnostics_df.empty:
-        with st.expander("Scan Diagnostics", expanded=True):
-            total = len(diagnostics_df)
-            selected = int((diagnostics_df["status"] == "selected").sum())
-            skipped = int((diagnostics_df["status"] == "skipped").sum())
-            errors = int((diagnostics_df["status"] == "error").sum())
-            st.write(f"Total symbols checked: {total} | Selected: {selected} | Skipped: {skipped} | Errors: {errors}")
-            st.dataframe(diagnostics_df, use_container_width=True)
-
-    if df.empty:
-        st.warning("No valid setups today.")
-    else:
-        risk_capital = BASE_CAPITAL * RISK_PER_TRADE
-        selected = None
-
-        for _, row in df.iterrows():
-            price = float(row["price"])
-            stop_price = float(row["stop_price"])
-            stop_pct = (price - stop_price) / price if price > 0 else -1
-            if stop_pct <= 0:
-                continue
-
-            position_value = risk_capital / stop_pct
-            quantity = int(position_value / price) if price > 0 else 0
-            if quantity <= 0:
-                continue
-
-            selected = {
-                "symbol": row["symbol"],
-                "security_id": row["security_id"],
-                "price": price,
-                "stop_price": stop_price,
-                "confidence": float(row["confidence"]),
-                "position_value": position_value,
-                "quantity": quantity,
-            }
-            break
-
-        if selected is None:
-            fallback = None
             for _, row in df.iterrows():
                 price = float(row["price"])
                 stop_price = float(row["stop_price"])
-                if price <= 0 or stop_price <= 0 or stop_price >= price:
+                stop_pct = (price - stop_price) / price if price > 0 else -1
+                if stop_pct <= 0:
                     continue
-                if price > BASE_CAPITAL:
+
+                position_value = risk_capital / stop_pct
+                quantity = int(position_value / price) if price > 0 else 0
+                if quantity <= 0:
                     continue
-                fallback = {
+
+                selected = {
                     "symbol": row["symbol"],
                     "security_id": row["security_id"],
                     "price": price,
                     "stop_price": stop_price,
                     "confidence": float(row["confidence"]),
-                    "position_value": price,
-                    "quantity": 1,
-                    "signal_strength": row.get("signal_strength", "unknown"),
+                    "position_value": position_value,
+                    "quantity": quantity,
                 }
                 break
 
-            if fallback is None or not allow_min_qty_fallback:
-                st.warning("No candidate fits current risk sizing (quantity computed as 0 for all setups).")
-            else:
-                selected = fallback
-                per_share_risk = selected["price"] - selected["stop_price"]
-                st.warning(
-                    f"Using 1-share fallback for {selected['symbol']} (signal: {selected['signal_strength']}). "
-                    f"Per-share risk ₹{round(per_share_risk, 2)} exceeds risk budget ₹{round(risk_capital, 2)}."
+            if selected is None:
+                fallback = None
+                for _, row in df.iterrows():
+                    price = float(row["price"])
+                    stop_price = float(row["stop_price"])
+                    if price <= 0 or stop_price <= 0 or stop_price >= price:
+                        continue
+                    if price > BASE_CAPITAL:
+                        continue
+                    fallback = {
+                        "symbol": row["symbol"],
+                        "security_id": row["security_id"],
+                        "price": price,
+                        "stop_price": stop_price,
+                        "confidence": float(row["confidence"]),
+                        "position_value": price,
+                        "quantity": 1,
+                        "signal_strength": row.get("signal_strength", "unknown"),
+                    }
+                    break
+
+                if fallback is None or not allow_min_qty_fallback:
+                    st.warning("No candidate fits current risk sizing (quantity computed as 0 for all setups).")
+                else:
+                    selected = fallback
+                    per_share_risk = selected["price"] - selected["stop_price"]
+                    st.warning(
+                        f"Using 1-share fallback for {selected['symbol']} (signal: {selected['signal_strength']}). "
+                        f"Per-share risk ₹{round(per_share_risk, 2)} exceeds risk budget ₹{round(risk_capital, 2)}."
+                    )
+
+            if selected is not None:
+                symbol = selected["symbol"]
+                security_id = selected["security_id"]
+                price = selected["price"]
+                stop_price = selected["stop_price"]
+                confidence = selected["confidence"]
+                position_value = selected["position_value"]
+                quantity = selected["quantity"]
+
+                if live_mode:
+                    try:
+                        buy = dhan.place_order(
+                            security_id=security_id,
+                            exchange_segment=EXCHANGE_EQ,
+                            transaction_type=dhan.BUY,
+                            quantity=quantity,
+                            order_type=dhan.MARKET,
+                            product_type=dhan.CNC,
+                            price=0
+                        )
+                        buy_id = buy.get("orderId", "LIVE_BUY_FAIL") if isinstance(buy, dict) else "LIVE_BUY_FAIL"
+                    except Exception as exc:
+                        st.error(f"Live BUY order failed for {symbol}: {exc}")
+                        buy_id = "LIVE_BUY_FAIL"
+
+                    try:
+                        stop_id, stop_type, _ = _place_stop_order(
+                            dhan_client=dhan,
+                            security_id=security_id,
+                            quantity=quantity,
+                            stop_price=stop_price,
+                        )
+                        st.info(f"Stop-loss placed ({stop_type}) for {symbol}. Order ID: {stop_id}")
+                    except Exception as exc:
+                        st.error(f"Live STOP order failed for {symbol}: {exc}")
+                        stop_id = "LIVE_STOP_FAIL"
+
+                else:
+                    buy_id = "PAPER_BUY"
+                    stop_id = "PAPER_STOP"
+                    st.info(f"Paper trade simulated: {symbol} | Qty: {quantity}")
+
+                add_trade(
+                    symbol,
+                    security_id,
+                    price,
+                    stop_price,
+                    position_value,
+                    confidence,
+                    buy_id,
+                    stop_id
                 )
 
-        if selected is not None:
-            symbol = selected["symbol"]
-            security_id = selected["security_id"]
-            price = selected["price"]
-            stop_price = selected["stop_price"]
-            confidence = selected["confidence"]
-            position_value = selected["position_value"]
-            quantity = selected["quantity"]
+with tab_risk:
+    st.caption("Scans live Dhan positions/holdings and marks each as SELL or HOLD.")
+    if st.button("Run Portfolio Risk Scan", key="run_portfolio_risk_scan"):
+        broker_positions, source_errors, unresolved_symbols = fetch_broker_portfolio_positions(dhan, symbol_map)
+        if source_errors:
+            st.warning(" | ".join(source_errors))
+        if unresolved_symbols:
+            st.warning(f"Could not resolve security_id for {len(unresolved_symbols)} broker position(s).")
 
-            if live_mode:
-                try:
-                    buy = dhan.place_order(
-                        security_id=security_id,
-                        exchange_segment=EXCHANGE_EQ,
-                        transaction_type=dhan.BUY,
-                        quantity=quantity,
-                        order_type=dhan.MARKET,
-                        product_type=dhan.CNC,
-                        price=0
-                    )
-                    buy_id = buy.get("orderId", "LIVE_BUY_FAIL") if isinstance(buy, dict) else "LIVE_BUY_FAIL"
-                except Exception as exc:
-                    st.error(f"Live BUY order failed for {symbol}: {exc}")
-                    buy_id = "LIVE_BUY_FAIL"
-
-                try:
-                    stop_id, stop_type, _ = _place_stop_order(
-                        dhan_client=dhan,
-                        security_id=security_id,
-                        quantity=quantity,
-                        stop_price=stop_price,
-                    )
-                    st.info(f"Stop-loss placed ({stop_type}) for {symbol}. Order ID: {stop_id}")
-                except Exception as exc:
-                    st.error(f"Live STOP order failed for {symbol}: {exc}")
-                    stop_id = "LIVE_STOP_FAIL"
-
+        if not broker_positions:
+            st.info("No broker positions/holdings to scan.")
+        else:
+            risk_df = scan_portfolio_risk(dhan, broker_positions)
+            sell_count = int((risk_df["advice"] == "SELL").sum()) if not risk_df.empty else 0
+            hold_count = int((risk_df["advice"] == "HOLD").sum()) if not risk_df.empty else 0
+            st.write(f"Positions scanned: {len(risk_df)} | SELL alerts: {sell_count} | HOLD: {hold_count}")
+            if sell_count > 0:
+                st.error("Risk detected in one or more positions. Review SELL alerts.")
             else:
-                buy_id = "PAPER_BUY"
-                stop_id = "PAPER_STOP"
-                st.info(f"Paper trade simulated: {symbol} | Qty: {quantity}")
+                st.success("No immediate sell alerts from current risk rules.")
+            st.dataframe(risk_df, use_container_width=True)
 
-            add_trade(
-                symbol,
-                security_id,
-                price,
-                stop_price,
-                position_value,
-                confidence,
-                buy_id,
-                stop_id
-            )
-
-# -----------------------
-# JOURNAL
-# -----------------------
-st.markdown("## Trade Journal")
-
-trades = get_all_trades()
-
-if trades:
-    df_trades = pd.DataFrame(trades, columns=get_trade_columns())
-    st.dataframe(df_trades)
-else:
-    st.write("No trades yet.")
+with tab_journal:
+    trades = get_all_trades()
+    if trades:
+        df_trades = pd.DataFrame(trades, columns=get_trade_columns())
+        st.dataframe(df_trades, use_container_width=True)
+    else:
+        st.write("No trades yet.")
