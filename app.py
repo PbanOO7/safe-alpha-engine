@@ -68,64 +68,69 @@ def build_symbol_map():
         "https://images.dhan.co/api-data/api-scrip-master-detailed.csv",
         "https://images.dhan.co/api-data/api-scrip-master.csv",
     ]
-    try:
-        df = None
-        last_exc = None
-        for url in urls:
-            try:
-                df = pd.read_csv(url, low_memory=False)
-                break
-            except Exception as exc:
-                last_exc = exc
-        if df is None:
-            raise RuntimeError(f"Unable to load Dhan scrip master from known URLs: {last_exc}")
+    errors = []
+    for url in urls:
+        try:
+            df = pd.read_csv(url, low_memory=False)
+            df.columns = df.columns.str.strip().str.upper()
 
-        df.columns = df.columns.str.strip().str.upper()
-
-        if "SEM_SEGMENT" in df.columns:
-            segment = df["SEM_SEGMENT"].astype(str).str.strip().str.upper()
-            filtered = df[segment == "NSE_EQ"].copy()
-            if not filtered.empty:
-                df = filtered
-
-        # Prefer cash-equity series to avoid derivatives/alternate lines with short history.
-        for series_col in ["SEM_SERIES", "SERIES", "SM_SERIES"]:
-            if series_col in df.columns:
-                series = df[series_col].astype(str).str.strip().str.upper()
-                filtered = df[series == "EQ"].copy()
+            if "SEM_SEGMENT" in df.columns:
+                segment = df["SEM_SEGMENT"].astype(str).str.strip().str.upper()
+                filtered = df[segment == "NSE_EQ"].copy()
                 if not filtered.empty:
                     df = filtered
-                break
 
-        symbol_cols = [c for c in ["SEM_TRADING_SYMBOL", "SEM_CUSTOM_SYMBOL", "SEM_SYMBOL"] if c in df.columns]
-        if not symbol_cols or "SEM_SMST_SECURITY_ID" not in df.columns:
-            raise ValueError("Required symbol/security-id columns not found in scrip master CSV.")
+            # Prefer cash-equity series to avoid derivatives/alternate lines with short history.
+            for series_col in ["SEM_SERIES", "SERIES", "SM_SERIES"]:
+                if series_col in df.columns:
+                    series = df[series_col].astype(str).str.strip().str.upper()
+                    filtered = df[series == "EQ"].copy()
+                    if not filtered.empty:
+                        df = filtered
+                    break
 
-        mapping = {}
-        for _, row in df.iterrows():
-            security_id = str(row["SEM_SMST_SECURITY_ID"]).strip()
-            if not security_id:
-                continue
+            symbol_cols = [c for c in ["SEM_TRADING_SYMBOL", "SEM_CUSTOM_SYMBOL", "SEM_SYMBOL"] if c in df.columns]
+            security_id_col = None
+            for candidate in ["SEM_SMST_SECURITY_ID", "SECURITY_ID", "SECURITYID", "SMST_SECURITY_ID"]:
+                if candidate in df.columns:
+                    security_id_col = candidate
+                    break
 
-            for symbol_col in symbol_cols:
-                raw_symbol = str(row.get(symbol_col, "")).strip().upper()
-                if not raw_symbol or raw_symbol == "NAN":
+            if not symbol_cols or security_id_col is None:
+                raise ValueError(
+                    f"Required columns missing in {url}. "
+                    f"Found symbols={symbol_cols}, security_id_col={security_id_col}."
+                )
+
+            mapping = {}
+            for _, row in df.iterrows():
+                security_id = str(row.get(security_id_col, "")).strip()
+                if not security_id or security_id == "NAN":
                     continue
 
-                # Keep first valid mapping per key to avoid late-row collisions.
-                mapping.setdefault(raw_symbol, security_id)
-                mapping.setdefault(normalize_symbol(raw_symbol), security_id)
-                mapping.setdefault(canonical_symbol(raw_symbol), security_id)
+                for symbol_col in symbol_cols:
+                    raw_symbol = str(row.get(symbol_col, "")).strip().upper()
+                    if not raw_symbol or raw_symbol == "NAN":
+                        continue
 
-                # Also ensure both base and -EQ aliases exist.
-                base = normalize_symbol(raw_symbol)
-                mapping.setdefault(f"{base}-EQ", security_id)
-                mapping.setdefault(canonical_symbol(base), security_id)
+                    # Keep first valid mapping per key to avoid late-row collisions.
+                    mapping.setdefault(raw_symbol, security_id)
+                    mapping.setdefault(normalize_symbol(raw_symbol), security_id)
+                    mapping.setdefault(canonical_symbol(raw_symbol), security_id)
 
-        return mapping
-    except Exception as exc:
-        st.warning(f"Could not load symbol map from Dhan master CSV: {exc}")
-        return {}
+                    # Also ensure both base and -EQ aliases exist.
+                    base = normalize_symbol(raw_symbol)
+                    mapping.setdefault(f"{base}-EQ", security_id)
+                    mapping.setdefault(canonical_symbol(base), security_id)
+
+            if mapping:
+                return mapping
+            raise ValueError(f"No symbol mappings produced from {url}.")
+        except Exception as exc:
+            errors.append(f"{url}: {exc}")
+
+    st.warning(f"Could not load symbol map from Dhan master CSV. Tried: {' | '.join(errors)}")
+    return {}
 
 
 def get_ltp(dhan_client, security_id):
