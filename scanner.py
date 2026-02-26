@@ -4,6 +4,9 @@ import pandas as pd
 HISTORY_START = "2023-01-01"
 MIN_CANDLES = 200
 SCORE_THRESHOLD = 70
+SYMBOL_MIN_CANDLES = {
+    "TATAMOTORS": 60,
+}
 
 UNIVERSE = [
     "RELIANCE",
@@ -205,6 +208,7 @@ def scan(dhan, symbol_map):
         log("NIFTY", "skipped", "regime_symbol_missing")
 
     for symbol in UNIVERSE:
+        required_candles = int(SYMBOL_MIN_CANDLES.get(symbol, MIN_CANDLES))
         security_ids = resolve_security_ids(symbol_map, symbol)
         if not security_ids:
             log(symbol, "skipped", "missing_security_id")
@@ -229,7 +233,7 @@ def scan(dhan, symbol_map):
                 last_exc = exc
                 continue
 
-            if len(candidate_df) >= MIN_CANDLES:
+            if len(candidate_df) >= required_candles:
                 security_id = str(candidate_id)
                 df = candidate_df
                 break
@@ -246,6 +250,7 @@ def scan(dhan, symbol_map):
                     "insufficient_candles",
                     security_id=str(best_short_id),
                     candles=int(len(best_short_df)),
+                    required_candles=required_candles,
                     candidate_ids=",".join(security_ids),
                 )
             else:
