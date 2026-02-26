@@ -7,11 +7,12 @@ It scans a curated NSE universe, scores setups using trend/momentum/volume/patte
 ## Features
 
 - EOD scan with scoring model (trend, breakout, ATR compression, volume, bullish engulfing)
+- Portfolio risk scan for active trades with SELL/HOLD advisory
 - Market regime filter using NIFTY vs EMA200
 - Trade sizing based on fixed risk per trade
 - Live or paper mode
 - Manual kill switch (persistent) + automatic drawdown circuit breaker
-- Trade journal persisted in SQLite
+- Trade journal persisted in SQLite (default) or hosted Postgres via `DATABASE_URL`
 - Built-in scan diagnostics (`selected`, `skipped`, `error` + reason codes)
 - Dhan SDK compatibility handling across method/constant variants
 
@@ -41,7 +42,7 @@ Candidate threshold: `score >= 70`.
 
 - `app.py`: Streamlit UI, scan trigger, sizing, order placement, kill switch, journal
 - `scanner.py`: market data fetch + signal engine + diagnostics
-- `database.py`: SQLite schema and persistence helpers
+- `database.py`: persistence helpers (SQLite fallback + Postgres support)
 - `requirements.txt`: Python dependencies
 
 ## Setup
@@ -58,6 +59,8 @@ pip install -r requirements.txt
 ```toml
 DHAN_CLIENT_ID = "your_client_id"
 DHAN_ACCESS_TOKEN = "your_access_token"
+# Optional but recommended for cloud persistence:
+# DATABASE_URL = "postgresql://user:password@host:5432/dbname?sslmode=require"
 ```
 
 4. Run the app:
@@ -74,6 +77,7 @@ For Streamlit Community Cloud deployment, ensure:
 - Secrets are configured in app settings:
   - `DHAN_CLIENT_ID`
   - `DHAN_ACCESS_TOKEN`
+  - `DATABASE_URL` (recommended for persistent storage across app restarts/redeploys)
 
 ## Diagnostics
 
@@ -90,7 +94,16 @@ After each scan, the app shows a diagnostics table with per-symbol outcomes:
 
 This is useful for identifying whether issues come from data/API, mapping, or strategy filters.
 
+## Portfolio Risk Advisory
+
+The app can scan currently active trades and mark each position as `SELL` or `HOLD`.
+
+Current SELL rules:
+- close <= stored stop price (`stop_loss_breached`)
+- close < EMA50 (`close_below_ema50`)
+- close < EMA20 and P&L < 0 (`close_below_ema20_with_negative_pnl`)
+
 ## Notes
 
-- The app currently stores data in local SQLite (`trades.db`).
+- If `DATABASE_URL` is set, app uses hosted Postgres; otherwise it uses local SQLite (`trades.db`).
 - This is a tooling/automation project and not investment advice.

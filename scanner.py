@@ -276,3 +276,101 @@ def scan(dhan, symbol_map):
 
     df_diagnostics = pd.DataFrame(diagnostics)
     return df_candidates, df_diagnostics
+
+
+def scan_portfolio_risk(dhan, active_trades):
+    """Scan active positions and return SELL/HOLD advisory with reasons."""
+    rows = []
+    to_date = datetime.now().strftime("%Y-%m-%d")
+    from_date = HISTORY_START
+
+    for trade in active_trades:
+        # Table order: id, symbol, security_id, entry_price, stop_price, position_size, ...
+        symbol = str(trade[1])
+        security_id = str(trade[2])
+        entry_price = float(trade[3]) if trade[3] is not None else 0.0
+        stop_price = float(trade[4]) if trade[4] is not None else 0.0
+
+        try:
+            raw = fetch_daily_history(
+                dhan_client=dhan,
+                security_id=security_id,
+                from_date=from_date,
+                to_date=to_date,
+            )
+            df = _to_candle_df(raw)
+        except Exception as exc:
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "security_id": security_id,
+                    "entry_price": round(entry_price, 2),
+                    "current_price": None,
+                    "stop_price": round(stop_price, 2),
+                    "pnl_pct": None,
+                    "advice": "SELL",
+                    "reason": f"data_fetch_error: {exc}",
+                }
+            )
+            continue
+
+        if len(df) < 60:
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "security_id": security_id,
+                    "entry_price": round(entry_price, 2),
+                    "current_price": None,
+                    "stop_price": round(stop_price, 2),
+                    "pnl_pct": None,
+                    "advice": "SELL",
+                    "reason": "insufficient_candles_for_risk_scan",
+                }
+            )
+            continue
+
+        df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
+        df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
+        latest = df.iloc[-1]
+
+        current_price = float(latest["close"])
+        ema20 = float(latest["EMA20"]) if pd.notna(latest["EMA20"]) else None
+        ema50 = float(latest["EMA50"]) if pd.notna(latest["EMA50"]) else None
+        pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else None
+
+        advice = "HOLD"
+        reason = "trend_intact"
+
+        if stop_price > 0 and current_price <= stop_price:
+            advice = "SELL"
+            reason = "stop_loss_breached"
+        elif ema50 is not None and current_price < ema50:
+            advice = "SELL"
+            reason = "close_below_ema50"
+        elif ema20 is not None and current_price < ema20 and pnl_pct is not None and pnl_pct < 0:
+            advice = "SELL"
+            reason = "close_below_ema20_with_negative_pnl"
+
+        rows.append(
+            {
+                "symbol": symbol,
+                "security_id": security_id,
+                "entry_price": round(entry_price, 2),
+                "current_price": round(current_price, 2),
+                "stop_price": round(stop_price, 2),
+                "pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None,
+                "advice": advice,
+                "reason": reason,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(
+            columns=["symbol", "security_id", "entry_price", "current_price", "stop_price", "pnl_pct", "advice", "reason"]
+        )
+
+    df_risk = pd.DataFrame(rows)
+    advice_rank = {"SELL": 0, "HOLD": 1}
+    df_risk["advice_rank"] = df_risk["advice"].map(advice_rank).fillna(9)
+    df_risk = df_risk.sort_values(["advice_rank", "pnl_pct"], na_position="last").drop(columns=["advice_rank"])
+    return df_risk.reset_index(drop=True)

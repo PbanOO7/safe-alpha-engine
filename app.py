@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
 from datetime import datetime
 from dhanhq import dhanhq
 from database import (
@@ -12,8 +11,9 @@ from database import (
     get_active_trades,
     get_kill_switch,
     set_kill_switch,
+    get_trade_columns,
 )
-from scanner import scan, fetch_daily_history
+from scanner import scan, fetch_daily_history, scan_portfolio_risk
 
 BASE_CAPITAL = 10000
 RISK_PER_TRADE = 0.01
@@ -46,6 +46,9 @@ dhan = dhanhq(
 
 EXCHANGE_EQ = getattr(dhan, "NSE_EQ", getattr(dhan, "NSE", "NSE_EQ"))
 ORDER_TYPE_STOP = getattr(dhan, "STOP_LOSS", getattr(dhan, "SL", "STOP_LOSS"))
+ORDER_TYPE_SL = getattr(dhan, "SL", ORDER_TYPE_STOP)
+ORDER_TYPE_SLM = getattr(dhan, "SLM", None)
+TICK_SIZE = 0.05
 
 # -----------------------
 # SYMBOL MAP
@@ -144,6 +147,69 @@ def estimate_equity(dhan_client):
 
     return equity, pricing_errors
 
+
+def _extract_order_id(order_response):
+    if not isinstance(order_response, dict):
+        return None
+    for key in ("orderId", "order_id", "data"):
+        value = order_response.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            nested = value.get("orderId") or value.get("order_id")
+            if isinstance(nested, str) and nested.strip():
+                return nested.strip()
+    return None
+
+
+def _place_stop_order(dhan_client, security_id, quantity, stop_price):
+    rounded_stop = round(float(stop_price), 2)
+    if rounded_stop <= 0:
+        raise ValueError(f"Invalid stop price: {stop_price}")
+
+    attempts = []
+    if ORDER_TYPE_SLM is not None:
+        attempts.append(
+            {
+                "order_type": ORDER_TYPE_SLM,
+                "price": 0,
+                "trigger_price": rounded_stop,
+                "label": "SLM",
+            }
+        )
+
+    sl_limit = max(round(rounded_stop - TICK_SIZE, 2), TICK_SIZE)
+    attempts.append(
+        {
+            "order_type": ORDER_TYPE_SL,
+            "price": sl_limit,
+            "trigger_price": rounded_stop,
+            "label": "SL",
+        }
+    )
+
+    last_error = None
+    for attempt in attempts:
+        try:
+            response = dhan_client.place_order(
+                security_id=security_id,
+                exchange_segment=EXCHANGE_EQ,
+                transaction_type=dhan_client.SELL,
+                quantity=quantity,
+                order_type=attempt["order_type"],
+                product_type=dhan_client.CNC,
+                price=attempt["price"],
+                trigger_price=attempt["trigger_price"],
+            )
+            order_id = _extract_order_id(response)
+            if order_id:
+                return order_id, attempt["label"], response
+            last_error = Exception(f"No order id in stop response: {response}")
+        except Exception as exc:
+            last_error = exc
+
+    raise RuntimeError(str(last_error) if last_error else "Unknown stop order placement failure")
+
 symbol_map = build_symbol_map()
 
 # -----------------------
@@ -168,6 +234,25 @@ if auto_circuit_active:
 if manual_kill_active:
     st.error("Manual kill switch is ON. New trades are blocked.")
 trading_blocked = auto_circuit_active or manual_kill_active
+
+# -----------------------
+# PORTFOLIO RISK SCAN
+# -----------------------
+st.markdown("## Portfolio Risk Scan")
+if st.button("Run Portfolio Risk Scan"):
+    active_trades = get_active_trades()
+    if not active_trades:
+        st.info("No active trades to scan.")
+    else:
+        risk_df = scan_portfolio_risk(dhan, active_trades)
+        sell_count = int((risk_df["advice"] == "SELL").sum()) if not risk_df.empty else 0
+        hold_count = int((risk_df["advice"] == "HOLD").sum()) if not risk_df.empty else 0
+        st.write(f"Positions scanned: {len(risk_df)} | SELL alerts: {sell_count} | HOLD: {hold_count}")
+        if sell_count > 0:
+            st.error("Risk detected in one or more positions. Review SELL alerts.")
+        else:
+            st.success("No immediate sell alerts from current risk rules.")
+        st.dataframe(risk_df, use_container_width=True)
 
 # -----------------------
 # EOD SCAN
@@ -270,17 +355,13 @@ if st.button("Run EOD Scan", disabled=trading_blocked):
                     buy_id = "LIVE_BUY_FAIL"
 
                 try:
-                    stop = dhan.place_order(
+                    stop_id, stop_type, _ = _place_stop_order(
+                        dhan_client=dhan,
                         security_id=security_id,
-                        exchange_segment=EXCHANGE_EQ,
-                        transaction_type=dhan.SELL,
                         quantity=quantity,
-                        order_type=ORDER_TYPE_STOP,
-                        product_type=dhan.CNC,
-                        price=round(stop_price, 2),
-                        trigger_price=round(stop_price, 2)
+                        stop_price=stop_price,
                     )
-                    stop_id = stop.get("orderId", "LIVE_STOP_FAIL") if isinstance(stop, dict) else "LIVE_STOP_FAIL"
+                    st.info(f"Stop-loss placed ({stop_type}) for {symbol}. Order ID: {stop_id}")
                 except Exception as exc:
                     st.error(f"Live STOP order failed for {symbol}: {exc}")
                     stop_id = "LIVE_STOP_FAIL"
@@ -306,19 +387,10 @@ if st.button("Run EOD Scan", disabled=trading_blocked):
 # -----------------------
 st.markdown("## Trade Journal")
 
-conn = sqlite3.connect("trades.db")
-cursor = conn.cursor()
-
-cursor.execute("PRAGMA table_info(trades)")
-columns_info = cursor.fetchall()
-column_names = [col[1] for col in columns_info]
-
 trades = get_all_trades()
 
 if trades:
-    df_trades = pd.DataFrame(trades, columns=column_names)
+    df_trades = pd.DataFrame(trades, columns=get_trade_columns())
     st.dataframe(df_trades)
 else:
     st.write("No trades yet.")
-
-conn.close()
