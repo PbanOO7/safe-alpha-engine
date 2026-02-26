@@ -188,12 +188,12 @@ def scan(dhan, symbol_map):
                 to_date=to_date,
             )
         except Exception as exc:
-            log(symbol, "error", "historical_data_failed", message=str(exc))
+            log(symbol, "error", "historical_data_failed", security_id=str(security_id), message=str(exc))
             continue
 
         df = _to_candle_df(raw)
         if len(df) < MIN_CANDLES:
-            log(symbol, "skipped", "insufficient_candles", candles=int(len(df)))
+            log(symbol, "skipped", "insufficient_candles", security_id=str(security_id), candles=int(len(df)))
             continue
 
         df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
