@@ -61,6 +61,9 @@ def build_symbol_map():
             s = s[:-3]
         return s
 
+    def canonical_symbol(symbol):
+        return "".join(ch for ch in normalize_symbol(symbol) if ch.isalnum())
+
     url = "https://images.dhan.co/api-data/api-scrip-master.csv"
     try:
         df = pd.read_csv(url, low_memory=False)
@@ -90,10 +93,12 @@ def build_symbol_map():
                 # Keep both exact exchange symbol and normalized key.
                 mapping[raw_symbol] = security_id
                 mapping[normalize_symbol(raw_symbol)] = security_id
+                mapping[canonical_symbol(raw_symbol)] = security_id
 
                 # Also ensure both base and -EQ aliases exist.
                 base = normalize_symbol(raw_symbol)
                 mapping[f"{base}-EQ"] = security_id
+                mapping[canonical_symbol(base)] = security_id
 
         return mapping
     except Exception as exc:

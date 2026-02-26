@@ -115,10 +115,17 @@ def is_bullish_engulfing(df):
 
 
 def resolve_security_id(symbol_map, symbol):
+    def canonical_symbol(value):
+        text = str(value).strip().upper()
+        if text.endswith("-EQ"):
+            text = text[:-3]
+        return "".join(ch for ch in text if ch.isalnum())
+
     candidates = [
         symbol,
         str(symbol).upper(),
         f"{str(symbol).upper()}-EQ",
+        canonical_symbol(symbol),
     ]
     for key in candidates:
         sec = symbol_map.get(key)
