@@ -72,25 +72,28 @@ def build_symbol_map():
             if not filtered.empty:
                 df = filtered
 
-        symbol_col = None
-        for candidate in ["SEM_TRADING_SYMBOL", "SEM_CUSTOM_SYMBOL", "SEM_SYMBOL"]:
-            if candidate in df.columns:
-                symbol_col = candidate
-                break
-
-        if symbol_col is None or "SEM_SMST_SECURITY_ID" not in df.columns:
+        symbol_cols = [c for c in ["SEM_TRADING_SYMBOL", "SEM_CUSTOM_SYMBOL", "SEM_SYMBOL"] if c in df.columns]
+        if not symbol_cols or "SEM_SMST_SECURITY_ID" not in df.columns:
             raise ValueError("Required symbol/security-id columns not found in scrip master CSV.")
 
         mapping = {}
-        for _, row in df[[symbol_col, "SEM_SMST_SECURITY_ID"]].dropna().iterrows():
-            raw_symbol = str(row[symbol_col]).strip().upper()
+        for _, row in df.iterrows():
             security_id = str(row["SEM_SMST_SECURITY_ID"]).strip()
-            if not raw_symbol or not security_id:
+            if not security_id:
                 continue
 
-            # Keep both the exact exchange symbol (e.g. RELIANCE-EQ) and normalized key (RELIANCE).
-            mapping[raw_symbol] = security_id
-            mapping[normalize_symbol(raw_symbol)] = security_id
+            for symbol_col in symbol_cols:
+                raw_symbol = str(row.get(symbol_col, "")).strip().upper()
+                if not raw_symbol or raw_symbol == "NAN":
+                    continue
+
+                # Keep both exact exchange symbol and normalized key.
+                mapping[raw_symbol] = security_id
+                mapping[normalize_symbol(raw_symbol)] = security_id
+
+                # Also ensure both base and -EQ aliases exist.
+                base = normalize_symbol(raw_symbol)
+                mapping[f"{base}-EQ"] = security_id
 
         return mapping
     except Exception as exc:
