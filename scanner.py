@@ -138,8 +138,8 @@ def scan(dhan, symbol_map):
     candidates = []
     diagnostics = []
 
-    def log(symbol, status, reason, **extra):
-        row = {"symbol": symbol, "status": status, "reason": reason}
+    def log(symbol, status, reason, security_id=None, **extra):
+        row = {"symbol": symbol, "status": status, "reason": reason, "security_id": security_id}
         row.update(extra)
         diagnostics.append(row)
 
@@ -216,7 +216,7 @@ def scan(dhan, symbol_map):
         volume = float(latest["volume"])
 
         if None in (ema20, ema50, ema200, atr, vol_avg, high20_prev, swing_low):
-            log(symbol, "skipped", "indicator_nan")
+            log(symbol, "skipped", "indicator_nan", security_id=str(security_id))
             continue
 
         score = regime_score
@@ -243,6 +243,7 @@ def scan(dhan, symbol_map):
                 symbol,
                 "skipped",
                 "setup_conditions_not_met",
+                security_id=str(security_id),
                 score=int(score),
                 trend_ok=bool(trend_ok),
                 breakout_ok=bool(breakout_ok),
@@ -254,7 +255,14 @@ def scan(dhan, symbol_map):
 
         stop_price = min(swing_low, price - (atr * 1.5))
         if stop_price <= 0 or stop_price >= price:
-            log(symbol, "skipped", "invalid_stop", stop_price=float(stop_price), close=float(price))
+            log(
+                symbol,
+                "skipped",
+                "invalid_stop",
+                security_id=str(security_id),
+                stop_price=float(stop_price),
+                close=float(price),
+            )
             continue
 
         candidate = {
@@ -270,6 +278,7 @@ def scan(dhan, symbol_map):
             symbol,
             "selected",
             "candidate_found",
+            security_id=str(security_id),
             confidence=int(candidate["confidence"]),
             signal_strength=candidate["signal_strength"],
         )
