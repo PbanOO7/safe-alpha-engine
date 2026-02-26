@@ -188,6 +188,9 @@ def scan(dhan, symbol_map):
         nifty_id = resolve_security_id(symbol_map, idx_name)
         if nifty_id:
             break
+    # Fallback: Dhan index ID for NIFTY 50 when index symbols are absent in equity-only maps.
+    if not nifty_id:
+        nifty_id = "13"
 
     if nifty_id:
         try:
