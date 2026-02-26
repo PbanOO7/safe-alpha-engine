@@ -64,9 +64,22 @@ def build_symbol_map():
     def canonical_symbol(symbol):
         return "".join(ch for ch in normalize_symbol(symbol) if ch.isalnum())
 
-    url = "https://images.dhan.co/api-data/api-scrip-master.csv"
+    urls = [
+        "https://images.dhan.co/api-data/api-scrip-master-detailed.csv",
+        "https://images.dhan.co/api-data/api-scrip-master.csv",
+    ]
     try:
-        df = pd.read_csv(url, low_memory=False)
+        df = None
+        last_exc = None
+        for url in urls:
+            try:
+                df = pd.read_csv(url, low_memory=False)
+                break
+            except Exception as exc:
+                last_exc = exc
+        if df is None:
+            raise RuntimeError(f"Unable to load Dhan scrip master from known URLs: {last_exc}")
+
         df.columns = df.columns.str.strip().str.upper()
 
         if "SEM_SEGMENT" in df.columns:
@@ -74,6 +87,15 @@ def build_symbol_map():
             filtered = df[segment == "NSE_EQ"].copy()
             if not filtered.empty:
                 df = filtered
+
+        # Prefer cash-equity series to avoid derivatives/alternate lines with short history.
+        for series_col in ["SEM_SERIES", "SERIES", "SM_SERIES"]:
+            if series_col in df.columns:
+                series = df[series_col].astype(str).str.strip().str.upper()
+                filtered = df[series == "EQ"].copy()
+                if not filtered.empty:
+                    df = filtered
+                break
 
         symbol_cols = [c for c in ["SEM_TRADING_SYMBOL", "SEM_CUSTOM_SYMBOL", "SEM_SYMBOL"] if c in df.columns]
         if not symbol_cols or "SEM_SMST_SECURITY_ID" not in df.columns:
@@ -90,15 +112,15 @@ def build_symbol_map():
                 if not raw_symbol or raw_symbol == "NAN":
                     continue
 
-                # Keep both exact exchange symbol and normalized key.
-                mapping[raw_symbol] = security_id
-                mapping[normalize_symbol(raw_symbol)] = security_id
-                mapping[canonical_symbol(raw_symbol)] = security_id
+                # Keep first valid mapping per key to avoid late-row collisions.
+                mapping.setdefault(raw_symbol, security_id)
+                mapping.setdefault(normalize_symbol(raw_symbol), security_id)
+                mapping.setdefault(canonical_symbol(raw_symbol), security_id)
 
                 # Also ensure both base and -EQ aliases exist.
                 base = normalize_symbol(raw_symbol)
-                mapping[f"{base}-EQ"] = security_id
-                mapping[canonical_symbol(base)] = security_id
+                mapping.setdefault(f"{base}-EQ", security_id)
+                mapping.setdefault(canonical_symbol(base), security_id)
 
         return mapping
     except Exception as exc:
