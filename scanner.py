@@ -370,12 +370,29 @@ def scan_portfolio_risk(dhan, active_trades):
     to_date = datetime.now().strftime("%Y-%m-%d")
     from_date = HISTORY_START
 
-    for trade in active_trades:
-        # Table order: id, symbol, security_id, entry_price, stop_price, position_size, ...
+    def parse_trade(trade):
+        if isinstance(trade, dict):
+            symbol = str(trade.get("symbol", "UNKNOWN"))
+            security_id = str(trade.get("security_id", "")).strip()
+            entry_price = float(trade.get("entry_price", 0) or 0)
+            stop_price = float(trade.get("stop_price", 0) or 0)
+            quantity = float(trade.get("quantity", 0) or 0)
+            return symbol, security_id, entry_price, stop_price, quantity
+
+        # DB tuple fallback:
+        # id, symbol, security_id, entry_price, stop_price, position_size, ...
         symbol = str(trade[1])
         security_id = str(trade[2])
         entry_price = float(trade[3]) if trade[3] is not None else 0.0
         stop_price = float(trade[4]) if trade[4] is not None else 0.0
+        position_size = float(trade[5]) if trade[5] is not None else 0.0
+        quantity = (position_size / entry_price) if entry_price > 0 else 0.0
+        return symbol, security_id, entry_price, stop_price, quantity
+
+    for trade in active_trades:
+        symbol, security_id, entry_price, stop_price, quantity = parse_trade(trade)
+        if not security_id or quantity <= 0:
+            continue
 
         try:
             raw = fetch_daily_history(

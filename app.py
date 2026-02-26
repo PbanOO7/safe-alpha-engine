@@ -13,7 +13,7 @@ from database import (
     set_kill_switch,
     get_trade_columns,
 )
-from scanner import scan, fetch_daily_history, scan_portfolio_risk
+from scanner import scan, fetch_daily_history, scan_portfolio_risk, resolve_security_id
 
 BASE_CAPITAL = 10000
 RISK_PER_TRADE = 0.01
@@ -195,6 +195,128 @@ def estimate_equity(dhan_client):
     return equity, pricing_errors
 
 
+def _extract_data_rows(response):
+    if not isinstance(response, dict):
+        return []
+    payload = response.get("data", response)
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("data", "rows", "positions", "holdings"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+    return []
+
+
+def _first_non_empty(record, keys):
+    for key in keys:
+        value = record.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text and text.upper() != "NAN":
+            return text
+    return None
+
+
+def _first_float(record, keys, default=0.0):
+    for key in keys:
+        value = record.get(key)
+        try:
+            num = float(value)
+            return num
+        except (TypeError, ValueError):
+            continue
+    return float(default)
+
+
+def _first_qty(record):
+    return _first_float(
+        record,
+        [
+            "netQty",
+            "netQuantity",
+            "quantity",
+            "qty",
+            "availableQty",
+            "holdingQty",
+            "totalQty",
+        ],
+        default=0.0,
+    )
+
+
+def _first_entry_price(record):
+    return _first_float(
+        record,
+        [
+            "avgPrice",
+            "averagePrice",
+            "avgCostPrice",
+            "buyAvg",
+            "costPrice",
+            "netAvg",
+            "lastTradedPrice",
+            "ltp",
+        ],
+        default=0.0,
+    )
+
+
+def fetch_broker_portfolio_positions(dhan_client, symbol_map):
+    sources = []
+    for source_name, fetch_fn in (("positions", dhan_client.get_positions), ("holdings", dhan_client.get_holdings)):
+        try:
+            response = fetch_fn()
+        except Exception as exc:
+            sources.append((source_name, [], f"{source_name}_api_exception: {exc}"))
+            continue
+        rows = _extract_data_rows(response)
+        sources.append((source_name, rows, None))
+
+    by_security_id = {}
+    unresolved = []
+    source_errors = []
+
+    for source_name, rows, err in sources:
+        if err:
+            source_errors.append(err)
+            continue
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+
+            quantity = _first_qty(item)
+            if quantity <= 0:
+                continue
+
+            symbol = _first_non_empty(item, ["tradingSymbol", "trading_symbol", "symbol", "securitySymbol", "displayName"])
+            security_id = _first_non_empty(item, ["securityId", "security_id", "dhanSecurityId", "smstSecurityId"])
+            if not security_id and symbol:
+                security_id = resolve_security_id(symbol_map, symbol)
+
+            if not security_id:
+                unresolved.append(symbol or "UNKNOWN")
+                continue
+
+            entry_price = _first_entry_price(item)
+            key = str(security_id)
+            if key in by_security_id:
+                continue
+
+            by_security_id[key] = {
+                "symbol": symbol or key,
+                "security_id": key,
+                "entry_price": float(entry_price),
+                "stop_price": 0.0,
+                "quantity": float(quantity),
+                "source": source_name,
+            }
+
+    return list(by_security_id.values()), source_errors, unresolved
+
+
 def _extract_order_id(order_response):
     if not isinstance(order_response, dict):
         return None
@@ -287,11 +409,16 @@ trading_blocked = auto_circuit_active or manual_kill_active
 # -----------------------
 st.markdown("## Portfolio Risk Scan")
 if st.button("Run Portfolio Risk Scan"):
-    active_trades = get_active_trades()
-    if not active_trades:
-        st.info("No active trades to scan.")
+    broker_positions, source_errors, unresolved_symbols = fetch_broker_portfolio_positions(dhan, symbol_map)
+    if source_errors:
+        st.warning(" | ".join(source_errors))
+    if unresolved_symbols:
+        st.warning(f"Could not resolve security_id for {len(unresolved_symbols)} broker position(s).")
+
+    if not broker_positions:
+        st.info("No broker positions/holdings to scan.")
     else:
-        risk_df = scan_portfolio_risk(dhan, active_trades)
+        risk_df = scan_portfolio_risk(dhan, broker_positions)
         sell_count = int((risk_df["advice"] == "SELL").sum()) if not risk_df.empty else 0
         hold_count = int((risk_df["advice"] == "HOLD").sum()) if not risk_df.empty else 0
         st.write(f"Positions scanned: {len(risk_df)} | SELL alerts: {sell_count} | HOLD: {hold_count}")
