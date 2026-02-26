@@ -134,6 +134,36 @@ def resolve_security_id(symbol_map, symbol):
     return None
 
 
+def resolve_security_ids(symbol_map, symbol):
+    def canonical_symbol(value):
+        text = str(value).strip().upper()
+        if text.endswith("-EQ"):
+            text = text[:-3]
+        return "".join(ch for ch in text if ch.isalnum())
+
+    keys = [
+        symbol,
+        str(symbol).upper(),
+        f"{str(symbol).upper()}-EQ",
+        canonical_symbol(symbol),
+    ]
+    ids = []
+    for key in keys:
+        sec = symbol_map.get(key)
+        if not sec:
+            continue
+        if isinstance(sec, list):
+            for item in sec:
+                value = str(item).strip()
+                if value and value not in ids:
+                    ids.append(value)
+        else:
+            value = str(sec).strip()
+            if value and value not in ids:
+                ids.append(value)
+    return ids
+
+
 def scan(dhan, symbol_map):
     candidates = []
     diagnostics = []
@@ -175,25 +205,57 @@ def scan(dhan, symbol_map):
         log("NIFTY", "skipped", "regime_symbol_missing")
 
     for symbol in UNIVERSE:
-        security_id = resolve_security_id(symbol_map, symbol)
-        if not security_id:
+        security_ids = resolve_security_ids(symbol_map, symbol)
+        if not security_ids:
             log(symbol, "skipped", "missing_security_id")
             continue
 
-        try:
-            raw = fetch_daily_history(
-                dhan_client=dhan,
-                security_id=security_id,
-                from_date=from_date,
-                to_date=to_date,
-            )
-        except Exception as exc:
-            log(symbol, "error", "historical_data_failed", security_id=str(security_id), message=str(exc))
-            continue
+        df = pd.DataFrame()
+        security_id = None
+        best_short_df = pd.DataFrame()
+        best_short_id = None
+        last_exc = None
 
-        df = _to_candle_df(raw)
-        if len(df) < MIN_CANDLES:
-            log(symbol, "skipped", "insufficient_candles", security_id=str(security_id), candles=int(len(df)))
+        for candidate_id in security_ids:
+            try:
+                raw = fetch_daily_history(
+                    dhan_client=dhan,
+                    security_id=candidate_id,
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+                candidate_df = _to_candle_df(raw)
+            except Exception as exc:
+                last_exc = exc
+                continue
+
+            if len(candidate_df) >= MIN_CANDLES:
+                security_id = str(candidate_id)
+                df = candidate_df
+                break
+
+            if len(candidate_df) > len(best_short_df):
+                best_short_df = candidate_df
+                best_short_id = str(candidate_id)
+
+        if df.empty:
+            if not best_short_df.empty:
+                log(
+                    symbol,
+                    "skipped",
+                    "insufficient_candles",
+                    security_id=str(best_short_id),
+                    candles=int(len(best_short_df)),
+                    candidate_ids=",".join(security_ids),
+                )
+            else:
+                log(
+                    symbol,
+                    "error",
+                    "historical_data_failed",
+                    security_id=",".join(security_ids),
+                    message=str(last_exc) if last_exc else "no_data_returned",
+                )
             continue
 
         df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()

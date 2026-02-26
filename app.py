@@ -103,6 +103,18 @@ def build_symbol_map():
                 )
 
             mapping = {}
+
+            def add_mapping(key, security_id):
+                existing = mapping.get(key)
+                if existing is None:
+                    mapping[key] = [security_id]
+                    return
+                if isinstance(existing, list):
+                    if security_id not in existing:
+                        existing.append(security_id)
+                    return
+                if existing != security_id:
+                    mapping[key] = [existing, security_id]
             for _, row in df.iterrows():
                 security_id = str(row.get(security_id_col, "")).strip()
                 if not security_id or security_id == "NAN":
@@ -113,15 +125,15 @@ def build_symbol_map():
                     if not raw_symbol or raw_symbol == "NAN":
                         continue
 
-                    # Keep first valid mapping per key to avoid late-row collisions.
-                    mapping.setdefault(raw_symbol, security_id)
-                    mapping.setdefault(normalize_symbol(raw_symbol), security_id)
-                    mapping.setdefault(canonical_symbol(raw_symbol), security_id)
+                    # Keep all valid mappings per key; scanner will choose the one with sufficient candles.
+                    add_mapping(raw_symbol, security_id)
+                    add_mapping(normalize_symbol(raw_symbol), security_id)
+                    add_mapping(canonical_symbol(raw_symbol), security_id)
 
                     # Also ensure both base and -EQ aliases exist.
                     base = normalize_symbol(raw_symbol)
-                    mapping.setdefault(f"{base}-EQ", security_id)
-                    mapping.setdefault(canonical_symbol(base), security_id)
+                    add_mapping(f"{base}-EQ", security_id)
+                    add_mapping(canonical_symbol(base), security_id)
 
             if mapping:
                 return mapping
